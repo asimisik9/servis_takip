@@ -4,8 +4,9 @@ from fastapi import FastAPI, Request, status, HTTPException
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 from .database import create_tables
-from .routers import auth, admin, driver, parent
+from .routers import auth, admin, driver, parent, location_ws
 from jose import JWTError
+from fastapi.middleware.cors import CORSMiddleware
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -25,11 +26,21 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# CORS middleware - Tüm origin'lere izin ver (geliştirme için)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://localhost:3000", "http://localhost:5174"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Include routers with prefix to ensure 401 instead of 404
 app.include_router(auth.router)
 app.include_router(driver.router, prefix="/api")
 app.include_router(parent.router, prefix="/api")
 app.include_router(admin.router, prefix="/api")
+app.include_router(location_ws.router)
 
 # Global exception handlers
 @app.exception_handler(JWTError)

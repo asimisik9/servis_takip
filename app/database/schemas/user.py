@@ -4,9 +4,9 @@ from pydantic import BaseModel, EmailStr
 from enum import Enum
 
 class UserRole(str, Enum):
-    veli = "Parent"
-    sofor = "Driver"
-    admin = "Admin"
+    veli = "veli"
+    sofor = "sofor"
+    admin = "admin"
 
 class UserBase(BaseModel):
     """Base schema for User"""

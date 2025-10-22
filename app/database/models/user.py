@@ -1,15 +1,23 @@
 # app/models/user.py
+
 from sqlalchemy import String, Enum, DateTime
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from datetime import datetime
 import enum
-
+from typing import TYPE_CHECKING
 from ..database import Base
 
+if TYPE_CHECKING:
+    from .school import School
+    from .bus import Bus
+    from .parent_student_relation import ParentStudentRelation
+    from .attendance_log import AttendanceLog
+    from .notification import Notification
+
 class UserRole(enum.Enum):
-    veli = "Parent"
-    sofor = "Driver"
-    admin = "Admin"
+    veli = "veli"
+    sofor = "sofor"
+    admin = "admin"
     
 class User(Base):
     __tablename__ = "users"
