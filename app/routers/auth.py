@@ -158,6 +158,7 @@ async def login(
     
     token_data = {
         "sub": user.email,
+        "id": user.id,
         "role": user.role.value
     }
     access_token = create_access_token(token_data)
@@ -286,6 +287,7 @@ async def refresh_token(
         
     token_data = {
         "sub": user.email,
+        "id": user.id,
         "role": user.role.value
     }
     

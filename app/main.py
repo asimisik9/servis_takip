@@ -7,6 +7,7 @@ from .database import create_tables
 from .routers import auth, admin, driver, parent, location_ws
 from jose import JWTError
 from fastapi.middleware.cors import CORSMiddleware
+from .middleware.audit import AuditMiddleware
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -25,6 +26,9 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan
 )
+
+# Audit Middleware (Inner - runs after CORS)
+app.add_middleware(AuditMiddleware)
 
 # CORS middleware - Tüm origin'lere izin ver (geliştirme için)
 app.add_middleware(

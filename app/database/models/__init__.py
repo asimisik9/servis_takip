@@ -13,3 +13,4 @@ from .student_bus_assignment import StudentBusAssignment
 from .attendance_log import AttendanceLog, AttendanceStatus
 from .bus_location import BusLocation
 from .notification import Notification, NotificationStatus
+from .audit_log import AuditLog
