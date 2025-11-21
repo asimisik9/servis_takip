@@ -7,10 +7,11 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from uuid import uuid4
-from datetime import datetime
+from datetime import datetime, timedelta
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 from ..database.database import AsyncSessionLocal
+from fastapi import Body
 
 router = APIRouter(
     prefix="/auth",
@@ -46,10 +47,12 @@ async def get_db():
 SECRET_KEY = "dev-key-not-secure"  # Change this in production!
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
+REFRESH_TOKEN_EXPIRE_DAYS = 7
 
 # Schema for login request
 class LoginResponse(BaseModel):
     access_token: str
+    refresh_token: str
     token_type: str
     user: User
 
@@ -101,9 +104,24 @@ async def register(
     # Return the created user
     return User.from_orm(new_user)
 
-def create_access_token(data: dict) -> str:
+def create_access_token(data: dict, expires_delta: timedelta | None = None) -> str:
     from jose import jwt
     to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+def create_refresh_token(data: dict, expires_delta: timedelta | None = None) -> str:
+    from jose import jwt
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+    to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 @router.post("/login", response_model=LoginResponse)
@@ -143,9 +161,11 @@ async def login(
         "role": user.role.value
     }
     access_token = create_access_token(token_data)
+    refresh_token = create_refresh_token(token_data)
     
     return LoginResponse(
         access_token=access_token,
+        refresh_token=refresh_token,
         token_type="bearer",
         user=User.from_orm(user)
     )
@@ -231,3 +251,51 @@ def get_current_parent_user(current_user: Annotated[User, Depends(get_current_us
             detail="Only parents can access this endpoint"
         )
     return current_user
+
+@router.post("/refresh", response_model=LoginResponse)
+async def refresh_token(
+    refresh_token: str = Body(..., embed=True),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Refresh token kullanarak yeni access token alır.
+    """
+    from jose import jwt, JWTError
+    
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    
+    try:
+        payload = jwt.decode(refresh_token, SECRET_KEY, algorithms=[ALGORITHM])
+        email: str = payload.get("sub")
+        if email is None:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+        
+    # Get user from database
+    query = select(UserModel).where(UserModel.email == email)
+    result = await db.execute(query)
+    user = result.scalar_one_or_none()
+    
+    if not user:
+        raise credentials_exception
+        
+    token_data = {
+        "sub": user.email,
+        "role": user.role.value
+    }
+    
+    # Create new tokens
+    access_token = create_access_token(token_data)
+    new_refresh_token = create_refresh_token(token_data)
+    
+    return LoginResponse(
+        access_token=access_token,
+        refresh_token=new_refresh_token,
+        token_type="bearer",
+        user=User.from_orm(user)
+    )
