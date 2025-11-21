@@ -5,24 +5,16 @@ from app.database.schemas.user import User
 from app.database.schemas.student import Student
 from app.database.schemas.bus_location import BusLocation
 from app.database.schemas.attendance_log import AttendanceLog
-from app.routers.auth import get_current_parent_user
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import models
-from app.database.database import AsyncSessionLocal
+
+from ..dependencies import get_db, get_current_parent_user
 
 router = APIRouter(
     prefix="/parent",
     tags=["parent"]
 )
-
-# DB session dependency
-async def get_db():
-    async with AsyncSessionLocal() as session:
-        try:
-            yield session
-        finally:
-            await session.close()
 
 @router.get("/me/students", response_model=List[Student])
 async def get_parent_students(

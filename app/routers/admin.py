@@ -3,12 +3,9 @@ from typing import List, Annotated
 from datetime import date
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from argon2 import PasswordHasher
 from uuid import uuid4
 from ..database import models
 
-from ..database.database import AsyncSessionLocal
-ph = PasswordHasher()
 from ..database.schemas.user import User, UserCreate, UserUpdate
 from ..database.schemas.student import Student, StudentCreate, StudentUpdate
 from ..database.schemas.bus import Bus, BusCreate, BusUpdate
@@ -16,24 +13,15 @@ from ..database.schemas.bus_location import BusLocation
 from ..database.schemas.attendance_log import AttendanceLog
 from ..database.schemas.student_bus_assignment import StudentBusAssignment
 from ..database.schemas.parent_student_relation import ParentStudentRelation
-from .auth import get_current_admin_user
 from ..database.schemas.school import School, SchoolCreate, SchoolUpdate
+
+from ..dependencies import get_db, get_current_admin_user
+from ..core.security import hash_password
 
 router = APIRouter(
     prefix="/admin",
     tags=["admin"]
 )
-
-# Database session dependency
-async def get_db():
-    async with AsyncSessionLocal() as session:
-        try:
-            yield session
-        finally:
-            await session.close()
-
-def get_password_hash(password: str) -> str:
-    return ph.hash(password)
 
 # User Management
 @router.get("/users", response_model=List[User])
@@ -110,7 +98,7 @@ async def create_user(
         full_name=user.full_name,
         email=user.email,
         phone_number=user.phone_number,
-        password_hash=get_password_hash(user.password),
+        password_hash=hash_password(user.password),
         role=user.role
     )
     
@@ -244,7 +232,7 @@ async def update_user(
         if user.role is not None:
             db_user.role = user.role
         if user.password is not None:
-            db_user.password_hash = get_password_hash(user.password)
+            db_user.password_hash = hash_password(user.password)
         
         # Değişiklikleri kaydet
         await db.commit()

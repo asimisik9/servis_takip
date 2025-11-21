@@ -3,7 +3,7 @@ from typing import Dict, List
 from jose import jwt, JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from .auth import SECRET_KEY, ALGORITHM
+from ..core.security import SECRET_KEY, ALGORITHM
 from ..database.database import AsyncSessionLocal
 from ..database import models
 

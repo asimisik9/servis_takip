@@ -1,53 +1,35 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi.security import OAuth2PasswordRequestForm
 from typing import Annotated
 from ..database.schemas.user import User, UserCreate
-from ..database.models.user import UserRole, User as UserModel
+from ..database.models.user import User as UserModel
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from uuid import uuid4
-from datetime import datetime, timedelta
-from argon2 import PasswordHasher
-from argon2.exceptions import VerifyMismatchError
-from ..database.database import AsyncSessionLocal
+from datetime import datetime
 from fastapi import Body
+
+from ..dependencies import (
+    get_db, 
+    get_current_user, 
+    get_current_admin_user, 
+    get_current_driver_user, 
+    get_current_parent_user
+)
+from ..core.security import (
+    hash_password, 
+    verify_password, 
+    create_access_token, 
+    create_refresh_token,
+    SECRET_KEY,
+    ALGORITHM
+)
 
 router = APIRouter(
     prefix="/auth",
     tags=["authentication"]
 )
-
-# Password hashing using argon2
-ph = PasswordHasher()
-
-def hash_password(password: str) -> str:
-    """Hash a password using argon2"""
-    return ph.hash(password)
-
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify a password against a hash"""
-    try:
-        ph.verify(hashed_password, plain_password)
-        return True
-    except (VerifyMismatchError, Exception) as e:
-        # Hata durumunda logla ve False döndür
-        print(f"Password verification error: {type(e).__name__}: {e}")
-        return False
-
-# Database dependency
-async def get_db():
-    async with AsyncSessionLocal() as session:
-        try:
-            yield session
-        finally:
-            await session.close()
-
-# JWT Configuration
-SECRET_KEY = "dev-key-not-secure"  # Change this in production!
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
-REFRESH_TOKEN_EXPIRE_DAYS = 7
 
 # Schema for login request
 class LoginResponse(BaseModel):
@@ -55,8 +37,6 @@ class LoginResponse(BaseModel):
     refresh_token: str
     token_type: str
     user: User
-
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 
 @router.post("/register", response_model=User, status_code=status.HTTP_201_CREATED)
 async def register(
@@ -103,26 +83,6 @@ async def register(
     
     # Return the created user
     return User.from_orm(new_user)
-
-def create_access_token(data: dict, expires_delta: timedelta | None = None) -> str:
-    from jose import jwt
-    to_encode = data.copy()
-    if expires_delta:
-        expire = datetime.utcnow() + expires_delta
-    else:
-        expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-
-def create_refresh_token(data: dict, expires_delta: timedelta | None = None) -> str:
-    from jose import jwt
-    to_encode = data.copy()
-    if expires_delta:
-        expire = datetime.utcnow() + expires_delta
-    else:
-        expire = datetime.utcnow() + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
-    to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 @router.post("/login", response_model=LoginResponse)
 async def login(
@@ -171,38 +131,6 @@ async def login(
         user=User.from_orm(user)
     )
 
-# Dependency for getting the current user
-async def get_current_user(
-    token: Annotated[str, Depends(oauth2_scheme)],
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    JWT token'dan kullanıcı bilgilerini çıkarır.
-    """
-    from jose import jwt, JWTError
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        email: str = payload.get("sub")
-        if email is None:
-            raise credentials_exception
-    except JWTError:
-        raise credentials_exception
-    
-    # Get user from database
-    query = select(UserModel).where(UserModel.email == email)
-    result = await db.execute(query)
-    user = result.scalar_one_or_none()
-    
-    if not user:
-        raise credentials_exception
-    
-    return User.from_orm(user)
-
 @router.get("/me", response_model=User)
 async def read_users_me(current_user: Annotated[User, Depends(get_current_user)]):
     """
@@ -218,40 +146,6 @@ async def logout(current_user: Annotated[User, Depends(get_current_user)]):
     Client-side'da token silinmelidir.
     """
     return {"message": "Successfully logged out"}
-
-# Permission dependencies
-def get_current_admin_user(current_user: Annotated[User, Depends(get_current_user)]):
-    """
-    Kullanıcının admin olup olmadığını kontrol eder.
-    """
-    if current_user.role != "admin":  # Token'da sadece string değer olduğu için enum yerine string karşılaştırması yapıyoruz
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admins can access this endpoint"
-        )
-    return current_user
-
-def get_current_driver_user(current_user: Annotated[User, Depends(get_current_user)]):
-    """
-    Kullanıcının şoför olup olmadığını kontrol eder.
-    """
-    if current_user.role != "sofor":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only drivers can access this endpoint"
-        )
-    return current_user
-
-def get_current_parent_user(current_user: Annotated[User, Depends(get_current_user)]):
-    """
-    Kullanıcının veli olup olmadığını kontrol eder.
-    """
-    if current_user.role != "veli":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only parents can access this endpoint"
-        )
-    return current_user
 
 @router.post("/refresh", response_model=LoginResponse)
 async def refresh_token(

@@ -4,7 +4,7 @@ from starlette.types import ASGIApp
 from sqlalchemy.ext.asyncio import AsyncSession
 from ..database.database import AsyncSessionLocal
 from ..database.models.audit_log import AuditLog
-from ..routers.auth import SECRET_KEY, ALGORITHM
+from ..core.security import SECRET_KEY, ALGORITHM
 from jose import jwt, JWTError
 from uuid import uuid4
 from datetime import datetime

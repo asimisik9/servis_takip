@@ -5,20 +5,11 @@ from ..database.schemas.user import User
 from ..database.schemas.student import Student
 from ..database.schemas.attendance_log import AttendanceLogCreate, AttendanceLog
 from ..database.schemas.bus_location import BusLocationCreate, BusLocation
-from .auth import get_current_driver_user
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import models
-from ..database.database import AsyncSessionLocal
 
-
-# DB session dependency
-async def get_db():
-    async with AsyncSessionLocal() as session:
-        try:
-            yield session
-        finally:
-            await session.close()
+from ..dependencies import get_db, get_current_driver_user
 
 router = APIRouter(
     prefix="/driver",
