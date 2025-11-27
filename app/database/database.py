@@ -1,10 +1,16 @@
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
-
-DATABASE_URL = "postgresql+asyncpg://isikasimm:mysecretpassword@localhost:5432/my-postgres-db"
+from ..core.config import settings
 
 # Asenkron veritabanı motorunu oluşturun
-engine = create_async_engine(DATABASE_URL, echo=True)
+# Production için pool ayarları
+engine = create_async_engine(
+    settings.SQLALCHEMY_DATABASE_URI,
+    echo=settings.ENVIRONMENT == "development",
+    pool_size=20,
+    max_overflow=10,
+    pool_pre_ping=True
+)
 
 # Asenkron oturum oluşturucu
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)

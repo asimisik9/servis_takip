@@ -1,20 +1,34 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, Query
 from typing import List, Annotated
 from datetime import date
 from app.database.schemas.user import User
-from app.database.schemas.student import Student
+from app.database.schemas.student import Student, StudentAddressUpdate
 from app.database.schemas.bus_location import BusLocation
 from app.database.schemas.attendance_log import AttendanceLog
-from sqlalchemy import select
+from app.database.schemas.dashboard import DashboardResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.database import models
 
 from ..dependencies import get_db, get_current_parent_user
+from ..services.parent_service import ParentService
 
 router = APIRouter(
     prefix="/parent",
     tags=["parent"]
 )
+
+@router.put("/students/{student_id}/address", response_model=Student)
+async def update_student_address(
+    student_id: str,
+    address_update: StudentAddressUpdate,
+    current_user: Annotated[User, Depends(get_current_parent_user)],
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Öğrencinin adresini günceller.
+    Adres güncellendiğinde enlem ve boylam otomatik olarak yeniden hesaplanır.
+    """
+    service = ParentService(db)
+    return await service.update_student_address(current_user.id, student_id, address_update)
 
 @router.get("/me/students", response_model=List[Student])
 async def get_parent_students(
@@ -24,11 +38,8 @@ async def get_parent_students(
     """
     Velinin öğrencilerini listeler.
     """
-    # ParentStudentRelation ile ilişkilendirilmiş öğrencileri getir
-    query = select(models.Student).join(models.ParentStudentRelation).where(models.ParentStudentRelation.parent_id == current_user.id)
-    result = await db.execute(query)
-    students = result.scalars().all()
-    return students
+    service = ParentService(db)
+    return await service.get_parent_students(current_user.id)
 
 @router.get("/students/{student_id}/bus/location", response_model=BusLocation)
 async def get_student_bus_location(
@@ -39,28 +50,8 @@ async def get_student_bus_location(
     """
     Öğrencinin servisinin anlık konumunu getirir.
     """
-    # Önce öğrenci gerçekten bu velinin mi kontrol et
-    query = select(models.ParentStudentRelation).where(
-        models.ParentStudentRelation.parent_id == current_user.id,
-        models.ParentStudentRelation.student_id == student_id
-    )
-    result = await db.execute(query)
-    relation = result.scalar_one_or_none()
-    if not relation:
-        raise HTTPException(status_code=404, detail="Student not found or not your child")
-    # Öğrencinin atandığı otobüsü bul
-    query = select(models.StudentBusAssignment).where(models.StudentBusAssignment.student_id == student_id)
-    result = await db.execute(query)
-    assignment = result.scalar_one_or_none()
-    if not assignment:
-        raise HTTPException(status_code=404, detail="Student has no assigned bus")
-    # Otobüsün son konumunu bul
-    query = select(models.BusLocation).where(models.BusLocation.bus_id == assignment.bus_id).order_by(models.BusLocation.timestamp.desc())
-    result = await db.execute(query)
-    bus_location = result.scalars().first()
-    if not bus_location:
-        raise HTTPException(status_code=404, detail="Bus location not found")
-    return bus_location
+    service = ParentService(db)
+    return await service.get_student_bus_location(current_user.id, student_id)
 
 @router.get("/students/{student_id}/attendance/history", response_model=List[AttendanceLog])
 async def get_student_attendance_history(
@@ -73,23 +64,30 @@ async def get_student_attendance_history(
     Öğrencinin geçmiş yoklama kayıtlarını listeler.
     Opsiyonel olarak tarih parametresi alır.
     """
-    # Önce öğrenci gerçekten bu velinin mi kontrol et
-    query = select(models.ParentStudentRelation).where(
-        models.ParentStudentRelation.parent_id == current_user.id,
-        models.ParentStudentRelation.student_id == student_id
-    )
-    result = await db.execute(query)
-    relation = result.scalar_one_or_none()
-    if not relation:
-        raise HTTPException(status_code=404, detail="Student not found or not your child")
-    # Yoklama kayıtlarını getir
-    query = select(models.AttendanceLog).where(models.AttendanceLog.student_id == student_id)
-    if date:
-        from datetime import datetime, timedelta
-        start = datetime.combine(date, datetime.min.time())
-        end = datetime.combine(date, datetime.max.time())
-        query = query.where(models.AttendanceLog.timestamp >= start, models.AttendanceLog.timestamp <= end)
-    query = query.order_by(models.AttendanceLog.timestamp.desc())
-    result = await db.execute(query)
-    logs = result.scalars().all()
-    return logs
+    service = ParentService(db)
+    return await service.get_student_attendance_history(current_user.id, student_id, date)
+
+@router.get("/students/{student_id}/dashboard", response_model=DashboardResponse)
+async def get_student_dashboard(
+    student_id: str,
+    current_user: Annotated[User, Depends(get_current_parent_user)],
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Öğrencinin dashboard verilerini (ETA, Şoför, Durum) getirir.
+    """
+    service = ParentService(db)
+    return await service.get_student_dashboard_data(current_user.id, student_id)
+
+@router.post("/students/{student_id}/absent")
+async def report_student_absence(
+    student_id: str,
+    current_user: Annotated[User, Depends(get_current_parent_user)],
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Öğrencinin o gün gelmeyeceğini bildirir.
+    """
+    service = ParentService(db)
+    await service.report_absence(current_user.id, student_id)
+    return {"message": "Absence reported successfully"}

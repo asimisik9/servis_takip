@@ -1,0 +1,58 @@
+from fastapi import APIRouter, Depends, status
+from typing import List, Annotated
+from sqlalchemy.ext.asyncio import AsyncSession
+from urllib.parse import unquote
+
+from ...database.schemas.user import User, UserCreate, UserUpdate
+from ...dependencies import get_db, get_current_admin_user
+from ...services.user_service import UserService
+
+router = APIRouter(tags=["admin-users"])
+
+@router.get("/users", response_model=List[User])
+async def list_users(
+    current_user: Annotated[User, Depends(get_current_admin_user)],
+    db: AsyncSession = Depends(get_db),
+    skip: int = 0,
+    limit: int = 100
+):
+    service = UserService(db)
+    return await service.get_users(skip, limit)
+
+@router.post("/users", response_model=User, status_code=status.HTTP_201_CREATED)
+async def create_user(
+    user: UserCreate,
+    current_user: Annotated[User, Depends(get_current_admin_user)],
+    db: AsyncSession = Depends(get_db)
+):
+    service = UserService(db)
+    return await service.create_user(user)
+
+@router.get("/users/{user_id}", response_model=User)
+async def get_user(
+    user_id: str,
+    current_user: Annotated[User, Depends(get_current_admin_user)],
+    db: AsyncSession = Depends(get_db)
+):
+    service = UserService(db)
+    return await service.get_user_by_id(unquote(user_id))
+
+@router.put("/users/{user_id}", response_model=User)
+async def update_user(
+    user_id: str,
+    user: UserUpdate,
+    current_user: Annotated[User, Depends(get_current_admin_user)],
+    db: AsyncSession = Depends(get_db)
+):
+    service = UserService(db)
+    return await service.update_user(unquote(user_id), user)
+
+@router.delete("/users/{user_id}", status_code=status.HTTP_200_OK)
+async def delete_user(
+    user_id: str,
+    current_user: Annotated[User, Depends(get_current_admin_user)],
+    db: AsyncSession = Depends(get_db)
+):
+    service = UserService(db)
+    await service.delete_user(unquote(user_id), current_user.id)
+    return {"detail": "User deleted successfully"}

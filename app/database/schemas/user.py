@@ -1,7 +1,8 @@
 from datetime import datetime
 from typing import Optional, List
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, field_validator
 from enum import Enum
+import re
 
 class UserRole(str, Enum):
     veli = "veli"
@@ -15,9 +16,31 @@ class UserBase(BaseModel):
     phone_number: str
     role: UserRole = UserRole.veli
 
+    @field_validator('phone_number')
+    @classmethod
+    def validate_phone(cls, v: str) -> str:
+        # Simple validation: must contain at least 10 digits
+        digits = re.sub(r'\D', '', v)
+        if len(digits) < 10:
+            raise ValueError('Phone number must contain at least 10 digits')
+        return v
+
 class UserCreate(UserBase):
     """Schema for creating a new User"""
     password: str
+
+    @field_validator('password')
+    @classmethod
+    def validate_password(cls, v: str) -> str:
+        if len(v) < 8:
+            raise ValueError('Password must be at least 8 characters long')
+        if not re.search(r"[A-Z]", v):
+            raise ValueError('Password must contain at least one uppercase letter')
+        if not re.search(r"[a-z]", v):
+            raise ValueError('Password must contain at least one lowercase letter')
+        if not re.search(r"\d", v):
+            raise ValueError('Password must contain at least one digit')
+        return v
 
 class UserUpdate(BaseModel):
     """Schema for updating a User"""
@@ -26,6 +49,21 @@ class UserUpdate(BaseModel):
     phone_number: Optional[str] = None
     role: Optional[UserRole] = None
     password: Optional[str] = None
+
+    @field_validator('password')
+    @classmethod
+    def validate_password(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        if len(v) < 8:
+            raise ValueError('Password must be at least 8 characters long')
+        if not re.search(r"[A-Z]", v):
+            raise ValueError('Password must contain at least one uppercase letter')
+        if not re.search(r"[a-z]", v):
+            raise ValueError('Password must contain at least one lowercase letter')
+        if not re.search(r"\d", v):
+            raise ValueError('Password must contain at least one digit')
+        return v
 
 class User(UserBase):
     """Schema for User responses"""

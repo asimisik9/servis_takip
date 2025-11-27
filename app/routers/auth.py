@@ -1,30 +1,20 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Body
 from fastapi.security import OAuth2PasswordRequestForm
 from typing import Annotated
 from ..database.schemas.user import User, UserCreate
-from ..database.models.user import User as UserModel
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from uuid import uuid4
-from datetime import datetime
-from fastapi import Body
 
 from ..dependencies import (
     get_db, 
     get_current_user, 
-    get_current_admin_user, 
-    get_current_driver_user, 
-    get_current_parent_user
+    oauth2_scheme
 )
-from ..core.security import (
-    hash_password, 
-    verify_password, 
-    create_access_token, 
-    create_refresh_token,
-    SECRET_KEY,
-    ALGORITHM
-)
+from ..services.auth_service import AuthService
+from ..core.limiter import limiter
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/auth",
@@ -46,89 +36,40 @@ async def register(
     """
     Yeni kullanıcı kaydı oluşturur.
     """
-    # Check if email already exists
-    query = select(UserModel).where(UserModel.email == user_data.email)
-    result = await db.execute(query)
-    if result.scalar_one_or_none():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email already registered"
-        )
-    
-    # Check if phone number already exists
-    query = select(UserModel).where(UserModel.phone_number == user_data.phone_number)
-    result = await db.execute(query)
-    if result.scalar_one_or_none():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Phone number already registered"
-        )
-    
-    # Create new user
-    hashed_password = hash_password(user_data.password)
-    new_user = UserModel(
-        id=str(uuid4()),
-        full_name=user_data.full_name,
-        email=user_data.email,
-        phone_number=user_data.phone_number,
-        password_hash=hashed_password,
-        role=user_data.role,
-        created_at=datetime.utcnow()
-    )
-    
-    # Add to database
-    db.add(new_user)
-    await db.commit()
-    await db.refresh(new_user)
-    
-    # Return the created user
-    return User.from_orm(new_user)
+    auth_service = AuthService(db)
+    new_user = await auth_service.register_user(user_data)
+    return User.model_validate(new_user)
 
 @router.post("/login", response_model=LoginResponse)
+@limiter.limit("5/minute")
 async def login(
+    request: Request,
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
     db: AsyncSession = Depends(get_db)
 ):
     """
     Kullanıcı girişi yapar ve JWT token döndürür.
     """
-    print(f"Login attempt - Username: {form_data.username}, Password length: {len(form_data.password)}")
+    logger.info(f"Login attempt - Username: {form_data.username}")
     
-    # Get user from database
-    query = select(UserModel).where(UserModel.email == form_data.username)
-    result = await db.execute(query)
-    user = result.scalar_one_or_none()
+    auth_service = AuthService(db)
+    user = await auth_service.authenticate_user(form_data.username, form_data.password)
     
     if not user:
-        print(f"User not found: {form_data.username}")
+        logger.warning(f"Authentication failed for: {form_data.username}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"}
         )
     
-    print(f"User found: {user.email}, checking password...")
-    if not verify_password(form_data.password, user.password_hash):
-        print(f"Password verification failed for {user.email}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Bearer"}
-        )
-    
-    token_data = {
-        "sub": user.email,
-        "id": user.id,
-        "role": user.role.value
-    }
-    access_token = create_access_token(token_data)
-    refresh_token = create_refresh_token(token_data)
+    access_token, refresh_token = await auth_service.create_tokens(user)
     
     return LoginResponse(
         access_token=access_token,
         refresh_token=refresh_token,
         token_type="bearer",
-        user=User.from_orm(user)
+        user=User.model_validate(user)
     )
 
 @router.get("/me", response_model=User)
@@ -139,12 +80,16 @@ async def read_users_me(current_user: Annotated[User, Depends(get_current_user)]
     return current_user
 
 @router.post("/logout")
-async def logout(current_user: Annotated[User, Depends(get_current_user)]):
+async def logout(
+    current_user: Annotated[User, Depends(get_current_user)],
+    token: str = Depends(oauth2_scheme),
+    db: AsyncSession = Depends(get_db)
+):
     """
-    Kullanıcı çıkışı yapar.
-    NOT: JWT stateless olduğu için backend'de token invalidation yapılmıyor.
-    Client-side'da token silinmelidir.
+    Kullanıcı çıkışı yapar ve token'ı kara listeye alır.
     """
+    auth_service = AuthService(db)
+    await auth_service.logout(token)
     return {"message": "Successfully logged out"}
 
 @router.post("/refresh", response_model=LoginResponse)
@@ -155,43 +100,12 @@ async def refresh_token(
     """
     Refresh token kullanarak yeni access token alır.
     """
-    from jose import jwt, JWTError
-    
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    
-    try:
-        payload = jwt.decode(refresh_token, SECRET_KEY, algorithms=[ALGORITHM])
-        email: str = payload.get("sub")
-        if email is None:
-            raise credentials_exception
-    except JWTError:
-        raise credentials_exception
-        
-    # Get user from database
-    query = select(UserModel).where(UserModel.email == email)
-    result = await db.execute(query)
-    user = result.scalar_one_or_none()
-    
-    if not user:
-        raise credentials_exception
-        
-    token_data = {
-        "sub": user.email,
-        "id": user.id,
-        "role": user.role.value
-    }
-    
-    # Create new tokens
-    access_token = create_access_token(token_data)
-    new_refresh_token = create_refresh_token(token_data)
+    auth_service = AuthService(db)
+    (access_token, new_refresh_token), user = await auth_service.refresh_token(refresh_token)
     
     return LoginResponse(
         access_token=access_token,
         refresh_token=new_refresh_token,
         token_type="bearer",
-        user=User.from_orm(user)
+        user=User.model_validate(user)
     )

@@ -1,7 +1,7 @@
 # app/models/student.py
 from __future__ import annotations
 from typing import TYPE_CHECKING
-from sqlalchemy import String, ForeignKey, DateTime
+from sqlalchemy import String, ForeignKey, DateTime, Float
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from datetime import datetime
 
@@ -20,6 +20,9 @@ class Student(Base):
     full_name: Mapped[str] = mapped_column(String)
     student_number: Mapped[str] = mapped_column(String, unique=True)
     school_id: Mapped[str] = mapped_column(ForeignKey("schools.id"))
+    address: Mapped[str | None] = mapped_column(String, nullable=True)
+    latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     
     # İlişkiler
@@ -35,3 +38,7 @@ class Student(Base):
     attendance_logs: Mapped[list["AttendanceLog"]] = relationship(
         "AttendanceLog", back_populates="student"
     )
+
+    @property
+    def school_name(self) -> str | None:
+        return self.school.school_name if self.school else None

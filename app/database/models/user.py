@@ -2,7 +2,7 @@
 
 from sqlalchemy import String, Enum, DateTime
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from datetime import datetime
+from datetime import datetime, timezone
 import enum
 from typing import TYPE_CHECKING
 from ..database import Base
@@ -27,7 +27,7 @@ class User(Base):
     phone_number: Mapped[str] = mapped_column(String, unique=True)
     password_hash: Mapped[str] = mapped_column(String)
     role: Mapped[UserRole] = mapped_column(Enum(UserRole), default=UserRole.veli)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     # İlişkiler
     schools_contact_person: Mapped[list["School"]] = relationship(

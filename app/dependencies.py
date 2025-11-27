@@ -7,8 +7,10 @@ from sqlalchemy import select
 
 from .database.database import AsyncSessionLocal
 from .database.models.user import User as UserModel, UserRole
+from .database.models.token_blacklist import TokenBlacklist
 from .database.schemas.user import User
 from .core.security import SECRET_KEY, ALGORITHM
+from .core.config import settings
 
 # Database dependency
 async def get_db():
@@ -18,7 +20,7 @@ async def get_db():
         finally:
             await session.close()
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/login")
 
 async def get_current_user(
     token: Annotated[str, Depends(oauth2_scheme)],
@@ -32,6 +34,13 @@ async def get_current_user(
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
+    
+    # Check if token is blacklisted
+    query = select(TokenBlacklist).where(TokenBlacklist.token == token)
+    result = await db.execute(query)
+    if result.scalar_one_or_none():
+        raise credentials_exception
+
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email: str = payload.get("sub")
@@ -48,7 +57,7 @@ async def get_current_user(
     if not user:
         raise credentials_exception
     
-    return User.from_orm(user)
+    return User.model_validate(user)
 
 class RoleChecker:
     def __init__(self, allowed_roles: List[str]):

@@ -4,11 +4,14 @@ from starlette.types import ASGIApp
 from sqlalchemy.ext.asyncio import AsyncSession
 from ..database.database import AsyncSessionLocal
 from ..database.models.audit_log import AuditLog
-from ..core.security import SECRET_KEY, ALGORITHM
+from ..core.config import settings
 from jose import jwt, JWTError
 from uuid import uuid4
-from datetime import datetime
+from datetime import datetime, timezone
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 class AuditMiddleware(BaseHTTPMiddleware):
     def __init__(self, app: ASGIApp):
@@ -29,7 +32,7 @@ class AuditMiddleware(BaseHTTPMiddleware):
         if auth_header and auth_header.startswith("Bearer "):
             token = auth_header.split(" ")[1]
             try:
-                payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+                payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
                 user_id = payload.get("id")
             except JWTError:
                 pass
@@ -50,6 +53,6 @@ class AuditMiddleware(BaseHTTPMiddleware):
                 session.add(audit_log)
                 await session.commit()
             except Exception as e:
-                print(f"Error logging audit: {e}")
+                logger.error(f"Error logging audit: {e}")
                 
         return response

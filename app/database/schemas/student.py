@@ -7,6 +7,9 @@ class StudentBase(BaseModel):
     full_name: str
     student_number: str
     school_id: str
+    address: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
 
 class StudentCreate(StudentBase):
     """Schema for creating a new Student"""
@@ -17,11 +20,19 @@ class StudentUpdate(BaseModel):
     full_name: Optional[str] = None
     student_number: Optional[str] = None
     school_id: Optional[str] = None
+    address: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+
+class StudentAddressUpdate(BaseModel):
+    """Schema for updating only Student address"""
+    address: str
 
 class Student(StudentBase):
     """Schema for Student responses"""
     id: str
     created_at: datetime
+    school_name: Optional[str] = None
 
     class Config:
         """Pydantic configuration"""

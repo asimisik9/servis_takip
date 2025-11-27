@@ -1,47 +1,14 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, status
-from typing import Dict, List
-from jose import jwt, JWTError
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from ..core.security import SECRET_KEY, ALGORITHM
 from ..database.database import AsyncSessionLocal
-from ..database import models
+from ..core.redis import redis_manager
+from ..services.location_service import LocationService
+import asyncio
+import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-# Her otobüs için bağlantı listesi tut
-active_connections: Dict[str, List[WebSocket]] = {}
-
-async def get_user_from_token(token: str, db: AsyncSession):
-    """Token'dan kullanıcıyı bulur"""
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        email: str = payload.get("sub")
-        if email is None:
-            return None
-        
-        query = select(models.User).where(models.User.email == email)
-        result = await db.execute(query)
-        return result.scalar_one_or_none()
-    except JWTError:
-        return None
-
-async def connect_bus(bus_id: str, websocket: WebSocket):
-    await websocket.accept()
-    if bus_id not in active_connections:
-        active_connections[bus_id] = []
-    active_connections[bus_id].append(websocket)
-
-def disconnect_bus(bus_id: str, websocket: WebSocket):
-    if bus_id in active_connections:
-        active_connections[bus_id].remove(websocket)
-        if not active_connections[bus_id]:
-            del active_connections[bus_id]
-
-async def broadcast_location(bus_id: str, data: dict):
-    if bus_id in active_connections:
-        for ws in active_connections[bus_id]:
-            await ws.send_json(data)
 
 @router.websocket("/ws/bus/{bus_id}/location")
 async def bus_location_ws(
@@ -51,49 +18,72 @@ async def bus_location_ws(
 ):
     """
     Otobüs konumu için WebSocket bağlantısı.
-    Bağlanmak için geçerli bir JWT token gereklidir.
-    Ayrıca kullanıcının bu otobüsü izleme yetkisi kontrol edilir.
-    URL: ws://localhost:8000/ws/bus/{bus_id}/location?token={jwt_token}
+    Redis Pub/Sub kullanarak ölçeklenebilir yapı.
     """
     async with AsyncSessionLocal() as db:
+        service = LocationService(db)
+        
         # Token doğrulama ve kullanıcıyı bulma
-        user = await get_user_from_token(token, db)
+        user = await service.get_user_from_token(token)
         if not user:
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
 
         # Yetki kontrolü
-        if user.role.value == "veli":
-            # Veli sadece kendi çocuğunun servisini izleyebilir
-            # Parent -> Student -> BusAssignment -> Bus
-            stmt = select(models.StudentBusAssignment).join(
-                models.ParentStudentRelation,
-                models.ParentStudentRelation.student_id == models.StudentBusAssignment.student_id
-            ).where(
-                models.ParentStudentRelation.parent_id == user.id,
-                models.StudentBusAssignment.bus_id == bus_id
-            )
-            result = await db.execute(stmt)
-            if not result.scalar_one_or_none():
-                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-                return
-                
-        elif user.role.value == "sofor":
-            # Şoför sadece kendi servisine bağlanabilir
-            stmt = select(models.Bus).where(
-                models.Bus.id == bus_id,
-                models.Bus.current_driver_id == user.id
-            )
-            result = await db.execute(stmt)
-            if not result.scalar_one_or_none():
-                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-                return
+        if not await service.validate_ws_access(user, bus_id):
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
 
-    await connect_bus(bus_id, websocket)
+    await websocket.accept()
+    
+    redis = await redis_manager.get_redis()
+    pubsub = redis.pubsub()
+    channel_name = f"bus:{bus_id}:location"
+    
+    # Redis kanalına abone ol
+    await pubsub.subscribe(channel_name)
+
+    async def forward_redis_to_ws():
+        """Redis'ten gelen mesajları WebSocket'e iletir"""
+        try:
+            async for message in pubsub.listen():
+                if message["type"] == "message":
+                    # Mesajı WebSocket üzerinden istemciye gönder
+                    await websocket.send_text(message["data"])
+        except Exception as e:
+            logger.error(f"Error forwarding Redis message: {e}")
+
+    # Redis dinleyicisini arka plan görevi olarak başlat
+    redis_reader_task = asyncio.create_task(forward_redis_to_ws())
+
     try:
         while True:
-            data = await websocket.receive_json()
-            # data: {"latitude": float, "longitude": float, "timestamp": str}
-            await broadcast_location(bus_id, data)
+            # WebSocket'ten mesaj bekle (Genellikle şoförden gelir)
+            data = await websocket.receive_text()
+            
+            # Eğer gönderen şoför ise, konumu Redis'e yayınla
+            if user.role.value == "sofor":
+                # Veriyi doğrula (basitçe JSON olup olmadığına bakıyoruz)
+                try:
+                    json_data = json.loads(data)
+                    # Timestamp ekle veya güncelle
+                    # json_data["server_timestamp"] = ...
+                    
+                    # Redis kanalına yayınla
+                    await redis.publish(channel_name, json.dumps(json_data))
+                    
+                    # TODO: Burada veriyi asenkron olarak veritabanına da kaydetmeliyiz
+                    # await save_location_to_db(bus_id, json_data)
+                    
+                except json.JSONDecodeError:
+                    pass
+            
     except WebSocketDisconnect:
-        disconnect_bus(bus_id, websocket)
+        pass
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
+    finally:
+        # Temizlik işlemleri
+        redis_reader_task.cancel()
+        await pubsub.unsubscribe(channel_name)
+        await pubsub.close()

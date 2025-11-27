@@ -14,3 +14,4 @@ from .attendance_log import AttendanceLog, AttendanceStatus
 from .bus_location import BusLocation
 from .notification import Notification, NotificationStatus
 from .audit_log import AuditLog
+from .token_blacklist import TokenBlacklist
