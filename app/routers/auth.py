@@ -8,7 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..dependencies import (
     get_db, 
     get_current_user, 
-    oauth2_scheme
+    oauth2_scheme,
+    get_auth_service
 )
 from ..services.auth_service import AuthService
 from ..core.limiter import limiter
@@ -31,12 +32,11 @@ class LoginResponse(BaseModel):
 @router.post("/register", response_model=User, status_code=status.HTTP_201_CREATED)
 async def register(
     user_data: UserCreate,
-    db: AsyncSession = Depends(get_db)
+    auth_service: AuthService = Depends(get_auth_service)
 ):
     """
     Yeni kullanıcı kaydı oluşturur.
     """
-    auth_service = AuthService(db)
     new_user = await auth_service.register_user(user_data)
     return User.model_validate(new_user)
 
@@ -45,14 +45,13 @@ async def register(
 async def login(
     request: Request,
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
-    db: AsyncSession = Depends(get_db)
+    auth_service: AuthService = Depends(get_auth_service)
 ):
     """
     Kullanıcı girişi yapar ve JWT token döndürür.
     """
     logger.info(f"Login attempt - Username: {form_data.username}")
     
-    auth_service = AuthService(db)
     user = await auth_service.authenticate_user(form_data.username, form_data.password)
     
     if not user:
@@ -83,26 +82,23 @@ async def read_users_me(current_user: Annotated[User, Depends(get_current_user)]
 async def logout(
     current_user: Annotated[User, Depends(get_current_user)],
     token: str = Depends(oauth2_scheme),
-    db: AsyncSession = Depends(get_db)
+    auth_service: AuthService = Depends(get_auth_service)
 ):
     """
     Kullanıcı çıkışı yapar ve token'ı kara listeye alır.
     """
-    auth_service = AuthService(db)
     await auth_service.logout(token)
     return {"message": "Successfully logged out"}
 
 @router.post("/refresh", response_model=LoginResponse)
 async def refresh_token(
     refresh_token: str = Body(..., embed=True),
-    db: AsyncSession = Depends(get_db)
+    auth_service: AuthService = Depends(get_auth_service)
 ):
     """
     Refresh token kullanarak yeni access token alır.
     """
-    auth_service = AuthService(db)
     (access_token, new_refresh_token), user = await auth_service.refresh_token(refresh_token)
-    
     return LoginResponse(
         access_token=access_token,
         refresh_token=new_refresh_token,

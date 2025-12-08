@@ -5,11 +5,16 @@ from fastapi import HTTPException
 from uuid import uuid4
 from typing import List, Optional
 import googlemaps
+import logging
 
 from ..core.config import settings
 from ..database.models.student import Student as StudentModel
 from ..database.models.school import School as SchoolModel
+from ..database.models.student_bus_assignment import StudentBusAssignment
 from ..database.schemas.student import StudentCreate, StudentUpdate
+from ..core.redis import redis_manager
+
+logger = logging.getLogger(__name__)
 
 class StudentService:
     def __init__(self, db: AsyncSession):
@@ -77,11 +82,13 @@ class StudentService:
             if not (await self.db.execute(query)).scalar_one_or_none():
                 raise HTTPException(status_code=400, detail="School not found")
 
+        address_changed = False
         if student_update.address is not None:
             db_student.address = student_update.address
             lat, lng = self._geocode_address(student_update.address)
             db_student.latitude = lat
             db_student.longitude = lng
+            address_changed = True
 
         if student_update.full_name is not None:
             db_student.full_name = student_update.full_name
@@ -92,6 +99,11 @@ class StudentService:
 
         await self.db.commit()
         await self.db.refresh(db_student)
+        
+        # Invalidate route cache if address changed
+        if address_changed:
+            await self._invalidate_route_caches_for_student(student_id)
+        
         return await self.get_student_by_id(db_student.id)
 
     async def delete_student(self, student_id: str):
@@ -101,3 +113,21 @@ class StudentService:
         
         await self.db.delete(db_student)
         await self.db.commit()
+    
+    async def _invalidate_route_caches_for_student(self, student_id: str) -> None:
+        """Invalidate route caches for all buses that have this student assigned"""
+        try:
+            # Get all bus assignments for this student
+            query = select(StudentBusAssignment).where(
+                StudentBusAssignment.student_id == student_id
+            )
+            result = await self.db.execute(query)
+            assignments = result.scalars().all()
+            
+            # Invalidate cache for each bus
+            for assignment in assignments:
+                cache_key = f"route:{assignment.bus_id}"
+                await redis_manager.delete(cache_key)
+                logger.info(f"Route cache invalidated for bus {assignment.bus_id}")
+        except Exception as e:
+            logger.error(f"Failed to invalidate route caches for student {student_id}: {str(e)}")

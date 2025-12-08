@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     POSTGRES_SERVER: str
     POSTGRES_PORT: str = "5432"
     POSTGRES_DB: str
+    POSTGRES_POOL_SIZE: int = 20
+    POSTGRES_MAX_OVERFLOW: int = 10
     
     # Redis
     REDIS_HOST: str = "redis"

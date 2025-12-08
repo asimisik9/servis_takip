@@ -5,14 +5,22 @@ from enum import Enum
 
 class AttendanceStatus(str, Enum):
     """Attendance status enum"""
-    indi = "İndi"
-    bindi = "Bindi"
+    indi = "indi"
+    bindi = "bindi"
 
 class AttendanceLogBase(BaseModel):
     """Base schema for AttendanceLog"""
     student_id: str
     driver_id: str
     bus_id: str
+    status: AttendanceStatus
+    latitude: float = Field(..., ge=-90, le=90)
+    longitude: float = Field(..., ge=-180, le=180)
+    log_time: datetime
+
+class AttendanceLogRequest(BaseModel):
+    """Schema for driver attendance log request (no driver_id/bus_id required)"""
+    student_id: str
     status: AttendanceStatus
     latitude: float = Field(..., ge=-90, le=90)
     longitude: float = Field(..., ge=-180, le=180)

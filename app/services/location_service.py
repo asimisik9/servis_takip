@@ -46,3 +46,8 @@ class LocationService:
             return result.scalar_one_or_none() is not None
             
         return False
+
+    async def get_driver_bus(self, driver_id: str) -> models.Bus | None:
+        query = select(models.Bus).where(models.Bus.current_driver_id == driver_id)
+        result = await self.db.execute(query)
+        return result.scalar_one_or_none()

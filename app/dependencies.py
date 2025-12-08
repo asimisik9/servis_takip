@@ -11,6 +11,7 @@ from .database.models.token_blacklist import TokenBlacklist
 from .database.schemas.user import User
 from .core.security import SECRET_KEY, ALGORITHM
 from .core.config import settings
+from .services.auth_service import AuthService
 
 # Database dependency
 async def get_db():
@@ -19,6 +20,9 @@ async def get_db():
             yield session
         finally:
             await session.close()
+
+def get_auth_service(db: AsyncSession = Depends(get_db)) -> AuthService:
+    return AuthService(db)
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/login")
 

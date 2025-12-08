@@ -67,7 +67,7 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Audit Middleware (Inner - runs after CORS)
-app.add_middleware(AuditMiddleware)
+# app.add_middleware(AuditMiddleware)
 
 # HTTPS Redirect (Production only)
 if settings.ENVIRONMENT == "production":
@@ -76,7 +76,7 @@ if settings.ENVIRONMENT == "production":
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.BACKEND_CORS_ORIGINS,
+    allow_origins=["*"], # Allow all origins for development
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

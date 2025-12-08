@@ -7,6 +7,7 @@ class DashboardResponse(BaseModel):
     driver_name: Optional[str] = Field(None, alias="driverName")
     driver_phone: Optional[str] = Field(None, alias="driverPhone")
     plate_number: Optional[str] = Field(None, alias="plateNumber")
+    bus_id: Optional[str] = Field(None, alias="busId")
 
     class Config:
         populate_by_name = True

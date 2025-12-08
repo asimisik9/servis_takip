@@ -7,8 +7,8 @@ from ..core.config import settings
 engine = create_async_engine(
     settings.SQLALCHEMY_DATABASE_URI,
     echo=settings.ENVIRONMENT == "development",
-    pool_size=20,
-    max_overflow=10,
+    pool_size=settings.POSTGRES_POOL_SIZE,
+    max_overflow=settings.POSTGRES_MAX_OVERFLOW,
     pool_pre_ping=True
 )
 

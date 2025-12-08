@@ -1,5 +1,6 @@
 import redis.asyncio as redis
 from .config import settings
+from typing import Optional, Any
 
 class RedisManager:
     def __init__(self):
@@ -23,6 +24,33 @@ class RedisManager:
         if not self.redis:
             await self.connect()
         return self.redis
+    
+    async def get(self, key: str) -> Optional[Any]:
+        """Get value from Redis"""
+        if not self.redis:
+            await self.connect()
+        return await self.redis.get(key)
+    
+    async def set(self, key: str, value: Any, ex: Optional[int] = None) -> bool:
+        """Set value in Redis with optional expiration"""
+        if not self.redis:
+            await self.connect()
+        return await self.redis.set(key, value, ex=ex)
+    
+    async def delete(self, key: str) -> int:
+        """Delete key from Redis"""
+        if not self.redis:
+            await self.connect()
+        return await self.redis.delete(key)
+    
+    async def delete_pattern(self, pattern: str) -> int:
+        """Delete all keys matching pattern"""
+        if not self.redis:
+            await self.connect()
+        keys = await self.redis.keys(pattern)
+        if keys:
+            return await self.redis.delete(*keys)
+        return 0
 
 redis_manager = RedisManager()
 

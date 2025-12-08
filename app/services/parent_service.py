@@ -131,9 +131,11 @@ class ParentService:
             # For demo purposes, let's assume it's active if we have a location
             # We can toggle between to_school and to_home based on time of day
             now = datetime.now()
-            if 6 <= now.hour < 12:
+            
+            # TEST İÇİN GÜNCELLEME: Saat kontrolünü esnetiyoruz (Tüm gün aktif)
+            if now.hour < 12:
                 trip_status = "to_school"
-            elif 12 <= now.hour < 20:
+            else:
                 trip_status = "to_home"
             
             # Mock ETA calculation
@@ -144,7 +146,8 @@ class ParentService:
             minutesLeft=minutes_left,
             driverName=driver.full_name if driver else None,
             driverPhone=driver.phone_number if driver else None,
-            plateNumber=bus.plate_number
+            plateNumber=bus.plate_number,
+            busId=bus.id
         )
 
     async def report_absence(self, parent_id: str, student_id: str):

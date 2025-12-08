@@ -13,8 +13,8 @@ if TYPE_CHECKING:
 
 
 class AttendanceStatus(enum.Enum):
-    indi = "İndi"
-    bindi = "Bindi"
+    indi = "indi"
+    bindi = "bindi"
 
 class AttendanceLog(Base):
     __tablename__ = "attendance_logs"
