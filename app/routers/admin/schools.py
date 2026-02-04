@@ -57,3 +57,19 @@ async def delete_school(
     service = SchoolService(db)
     await service.delete_school(unquote(school_id))
     return {"detail": "School deleted successfully"}
+
+
+@router.post("/schools/geocode-all", status_code=status.HTTP_200_OK)
+async def geocode_all_schools(
+    current_user: Annotated[User, Depends(get_current_admin_user)],
+    db: AsyncSession = Depends(get_db)
+):
+    """Geocode all schools that don't have coordinates yet"""
+    service = SchoolService(db)
+    result = await service.geocode_existing_schools()
+    return {
+        "detail": f"Geocoded {result['updated']} schools successfully",
+        "updated": result["updated"],
+        "failed": result["failed"],
+        "total": result["total"]
+    }

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from typing import List, Annotated
 from datetime import date
 from ..database.schemas.user import User
@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..dependencies import get_db, get_current_driver_user
 from ..services.driver_service import DriverService
 from ..services.route_service import RouteService
+from ..services.route_progress_service import RouteProgressService
 
 router = APIRouter(
     prefix="/driver",
@@ -56,7 +57,11 @@ async def update_bus_location(
 @router.get("/buses/me/route", response_model=OptimizedRouteResponse)
 async def get_driver_bus_route(
     current_user: Annotated[User, Depends(get_current_driver_user)],
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    origin_lat: float | None = Query(default=None, ge=-90, le=90),
+    origin_lng: float | None = Query(default=None, ge=-180, le=180),
+    exclude_student_ids: str | None = Query(default=None, description="Comma-separated student IDs to exclude (visited)"),
+    include_all: bool = Query(default=False, description="If true, includes all students regardless of visited list")
 ):
     """
     Şoförün sorumlu olduğu servis için optimize edilmiş rotayı getirir.
@@ -68,6 +73,7 @@ async def get_driver_bus_route(
     """
     driver_service = DriverService(db)
     route_service = RouteService(db)
+    progress_service = RouteProgressService()
     
     # Get driver's assigned bus
     bus_id = await driver_service.get_driver_bus_id(current_user.id)
@@ -77,9 +83,25 @@ async def get_driver_bus_route(
             detail="Driver has no assigned bus"
         )
     
+    # Build origin tuple if provided
+    origin = None
+    if origin_lat is not None and origin_lng is not None:
+        origin = (origin_lat, origin_lng)
+
+    # Parse exclude list if provided
+    exclude_list = None
+    if exclude_student_ids:
+        exclude_list = [s.strip() for s in exclude_student_ids.split(",") if s.strip()]
+
     # Get optimized route for the bus
     try:
-        return await route_service.get_optimized_route(bus_id)
+        return await route_service.get_optimized_route(
+            bus_id=bus_id,
+            origin=origin,
+            destination=None,  # default: school
+            exclude_student_ids=exclude_list,
+            include_all=include_all,
+        )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -87,3 +109,45 @@ async def get_driver_bus_route(
             status_code=500,
             detail=f"Failed to calculate route: {str(e)}"
         )
+
+
+@router.get("/buses/me/route/visited", response_model=list[str])
+async def get_visited_students(
+    current_user: Annotated[User, Depends(get_current_driver_user)],
+    db: AsyncSession = Depends(get_db)
+):
+    driver_service = DriverService(db)
+    bus_id = await driver_service.get_driver_bus_id(current_user.id)
+    if not bus_id:
+        raise HTTPException(status_code=404, detail="Driver has no assigned bus")
+    progress = RouteProgressService()
+    return await progress.get_visited(bus_id)
+
+
+@router.post("/buses/me/route/visited/{student_id}", status_code=status.HTTP_200_OK)
+async def mark_student_visited(
+    student_id: str,
+    current_user: Annotated[User, Depends(get_current_driver_user)],
+    db: AsyncSession = Depends(get_db)
+):
+    driver_service = DriverService(db)
+    bus_id = await driver_service.get_driver_bus_id(current_user.id)
+    if not bus_id:
+        raise HTTPException(status_code=404, detail="Driver has no assigned bus")
+    progress = RouteProgressService()
+    await progress.add_visited(bus_id, student_id)
+    return {"detail": "Visited marked"}
+
+
+@router.delete("/buses/me/route/visited", status_code=status.HTTP_200_OK)
+async def clear_visited_students(
+    current_user: Annotated[User, Depends(get_current_driver_user)],
+    db: AsyncSession = Depends(get_db)
+):
+    driver_service = DriverService(db)
+    bus_id = await driver_service.get_driver_bus_id(current_user.id)
+    if not bus_id:
+        raise HTTPException(status_code=404, detail="Driver has no assigned bus")
+    progress = RouteProgressService()
+    await progress.clear(bus_id)
+    return {"detail": "Visited cleared"}

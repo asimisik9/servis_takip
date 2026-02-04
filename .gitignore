@@ -1,0 +1,11 @@
+# Python artifacts
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+venv/
+.env/
+
+# Local runtime files
+*.sqlite3
+instance/

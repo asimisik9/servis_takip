@@ -21,6 +21,8 @@ class SchoolUpdate(BaseModel):
 class School(SchoolBase):
     """Schema for School responses"""
     id: str
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
 
     class Config:
         """Pydantic configuration"""
@@ -30,6 +32,8 @@ class School(SchoolBase):
                 "id": "1",
                 "school_name": "Atatürk İlkokulu",
                 "school_address": "Ankara, Çankaya",
-                "contact_person_id": "user123"
+                "contact_person_id": "user123",
+                "latitude": 39.9334,
+                "longitude": 32.8597
             }
         }
