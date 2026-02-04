@@ -50,9 +50,9 @@ class RouteService:
         self,
         bus_id: str,
         origin: Optional[Tuple[float, float]] = None,
-        destination: Optional[Tuple[float, float]] = None,
         exclude_student_ids: Optional[List[str]] = None,
         include_all: bool = False,
+        trip_type: str = "to_school",
     ) -> OptimizedRouteResponse:
         """
         Get optimized route for a bus with all assigned students
@@ -64,13 +64,13 @@ class RouteService:
             OptimizedRouteResponse with optimized stops and total distance/duration
         """
         # Check cache first
-        # Compose cache key based on origin to avoid stale routes
+        # Compose cache key based on origin and trip_type to avoid stale routes
         if origin is not None:
             o_lat = round(origin[0], 4)
             o_lng = round(origin[1], 4)
-            cache_key = f"route:{bus_id}:{o_lat}:{o_lng}:{'all' if include_all else 'filtered'}"
+            cache_key = f"route:{bus_id}:{o_lat}:{o_lng}:{trip_type}:{'all' if include_all else 'filtered'}"
         else:
-            cache_key = f"route:{bus_id}:no_origin:{'all' if include_all else 'filtered'}"
+            cache_key = f"route:{bus_id}:no_origin:{trip_type}:{'all' if include_all else 'filtered'}"
         cached_route = await redis_manager.get(cache_key)
         if cached_route:
             logger.info(f"Route cache hit for bus {bus_id}")
@@ -110,19 +110,28 @@ class RouteService:
                 generated_at=datetime.utcnow()
             )
         
-        # Determine origin: provided by client or latest bus location
-        if origin is None:
-            latest_loc = await self._get_latest_bus_location(bus_id)
-            if latest_loc is not None:
-                origin = latest_loc
-        logger.info(f"Route: origin set to {origin} for bus {bus_id}")
-        logger.info(f"Route: origin set to {origin} for bus {bus_id}")
+        # Get school coordinates (needed for both trip types)
+        school_coords = await self._get_school_coordinates(bus_id)
 
-        # Determine destination: provided by client or school's coordinates
-        if destination is None:
-            destination = await self._get_school_coordinates(bus_id)
-        logger.info(f"Route: destination set to {destination} for bus {bus_id}")
-        logger.info(f"Route: destination set to {destination} for bus {bus_id}")
+        # Determine origin and destination based on trip_type
+        if trip_type == "to_school":
+            # TO SCHOOL: origin=driver location, destination=school
+            if origin is None:
+                latest_loc = await self._get_latest_bus_location(bus_id)
+                if latest_loc is not None:
+                    origin = latest_loc
+            destination = school_coords
+            logger.info(f"Route (to_school): origin={origin}, destination=school {destination}")
+        else:
+            # FROM SCHOOL: origin=school, destination=farthest student from school
+            origin = school_coords
+            # Destination will be determined after optimization (farthest student)
+            # For now, use the last student in stops as placeholder
+            destination = None
+            if stops:
+                # Find the student farthest from school (will be last drop-off)
+                destination = await self._get_farthest_student_coords(stops, school_coords)
+            logger.info(f"Route (from_school): origin=school {origin}, destination=farthest student {destination}")
 
         # Optimize route using Google Maps
         if self.gmaps_client and len(stops) > 0 and origin is not None and destination is not None:
@@ -279,6 +288,52 @@ class RouteService:
                 return (lat, lng)
         except Exception as e:
             logger.error(f"Failed to geocode school address: {str(e)}")
+        return None
+
+    async def _get_farthest_student_coords(
+        self,
+        stops: List[RouteStop],
+        school_coords: Optional[Tuple[float, float]]
+    ) -> Optional[Tuple[float, float]]:
+        """
+        Find the student farthest from school (straight-line distance).
+        This student will be the last drop-off in from_school mode.
+        """
+        if not stops:
+            return None
+        if school_coords is None:
+            # If no school coords, just use the last stop
+            return (stops[-1].latitude, stops[-1].longitude)
+        
+        import math
+        
+        def haversine_distance(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+            """Calculate haversine distance in meters"""
+            R = 6371000  # Earth radius in meters
+            phi1 = math.radians(lat1)
+            phi2 = math.radians(lat2)
+            delta_phi = math.radians(lat2 - lat1)
+            delta_lambda = math.radians(lng2 - lng1)
+            a = math.sin(delta_phi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda / 2) ** 2
+            c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+            return R * c
+        
+        school_lat, school_lng = school_coords
+        farthest_stop = None
+        max_distance = -1
+        
+        for stop in stops:
+            dist = haversine_distance(school_lat, school_lng, stop.latitude, stop.longitude)
+            if dist > max_distance:
+                max_distance = dist
+                farthest_stop = stop
+        
+        if farthest_stop:
+            logger.info(
+                f"Farthest student from school: {farthest_stop.full_name} "
+                f"at ({farthest_stop.latitude}, {farthest_stop.longitude}), distance: {max_distance:.0f}m"
+            )
+            return (farthest_stop.latitude, farthest_stop.longitude)
         return None
 
     async def _optimize_with_google_maps(

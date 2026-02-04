@@ -61,7 +61,8 @@ async def get_driver_bus_route(
     origin_lat: float | None = Query(default=None, ge=-90, le=90),
     origin_lng: float | None = Query(default=None, ge=-180, le=180),
     exclude_student_ids: str | None = Query(default=None, description="Comma-separated student IDs to exclude (visited)"),
-    include_all: bool = Query(default=False, description="If true, includes all students regardless of visited list")
+    include_all: bool = Query(default=False, description="If true, includes all students regardless of visited list"),
+    trip_type: str = Query(default="to_school", description="Trip type: 'to_school' (pickup) or 'from_school' (dropoff)")
 ):
     """
     Şoförün sorumlu olduğu servis için optimize edilmiş rotayı getirir.
@@ -93,14 +94,25 @@ async def get_driver_bus_route(
     if exclude_student_ids:
         exclude_list = [s.strip() for s in exclude_student_ids.split(",") if s.strip()]
 
+    # Validate trip_type
+    if trip_type not in ("to_school", "from_school"):
+        raise HTTPException(
+            status_code=400,
+            detail="trip_type must be 'to_school' or 'from_school'"
+        )
+
+    # Save trip_type to Redis for parent app synchronization
+    from ..core.redis import redis_manager
+    await redis_manager.set(f"bus:{bus_id}:trip_type", trip_type, ex=3600)  # 1 hour TTL
+
     # Get optimized route for the bus
     try:
         return await route_service.get_optimized_route(
             bus_id=bus_id,
             origin=origin,
-            destination=None,  # default: school
             exclude_student_ids=exclude_list,
             include_all=include_all,
+            trip_type=trip_type,
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
