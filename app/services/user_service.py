@@ -1,21 +1,48 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from fastapi import HTTPException, status
 from uuid import uuid4
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from ..database.models.user import User as UserModel
+from ..database.models.bus import Bus as BusModel
+from ..database.models.school import School as SchoolModel
 from ..database.schemas.user import UserCreate, UserUpdate
 from ..core.security import hash_password
+
+import logging
+logger = logging.getLogger(__name__)
 
 class UserService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def get_users(self, skip: int = 0, limit: int = 100) -> List[UserModel]:
-        query = select(UserModel).offset(skip).limit(limit)
+    async def get_users(
+        self, 
+        skip: int = 0, 
+        limit: int = 100,
+        current_user_org_id: Optional[str] = None
+    ) -> Tuple[List[UserModel], int]:
+        """
+        Get users with tenant filtering and total count.
+        current_user_org_id: None = super-admin (sees all), value = tenant admin (filtered)
+        Returns: (users, total_count)
+        """
+        query = select(UserModel)
+        count_query = select(func.count()).select_from(UserModel)
+        
+        # Tenant filter
+        if current_user_org_id is not None:
+            query = query.where(UserModel.organization_id == current_user_org_id)
+            count_query = count_query.where(UserModel.organization_id == current_user_org_id)
+        
+        # Get total count
+        total = (await self.db.execute(count_query)).scalar() or 0
+        
+        # Get paginated results
+        query = query.offset(skip).limit(limit)
         result = await self.db.execute(query)
-        return result.scalars().all()
+        return result.scalars().all(), total
 
     async def get_user_by_id(self, user_id: str) -> Optional[UserModel]:
         query = select(UserModel).where(UserModel.id == user_id)
@@ -68,6 +95,8 @@ class UserService:
         if user_update.phone_number is not None:
             db_user.phone_number = user_update.phone_number
         if user_update.role is not None:
+            if db_user.role != user_update.role:
+                logger.warning(f"Role change: user={user_id} from={db_user.role.value} to={user_update.role}")
             db_user.role = user_update.role
         if user_update.password is not None:
             db_user.password_hash = hash_password(user_update.password)
@@ -83,6 +112,22 @@ class UserService:
         db_user = await self.get_user_by_id(user_id)
         if not db_user:
             raise HTTPException(status_code=404, detail="User not found")
-            
-        await self.db.delete(db_user)
+
+        # Check if user is a contact person for any school (RESTRICT)
+        query = select(func.count()).select_from(SchoolModel).where(SchoolModel.contact_person_id == user_id)
+        school_count = (await self.db.execute(query)).scalar()
+        if school_count > 0:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Cannot delete user: still contact person for {school_count} school(s). Reassign first."
+            )
+
+        # Check if user is a driver for any bus (SET NULL handled by FK, but warn)
+        query = select(func.count()).select_from(BusModel).where(BusModel.current_driver_id == user_id)
+        bus_count = (await self.db.execute(query)).scalar()
+
+        # Soft-delete: deactivate instead of hard delete
+        db_user.is_active = False
         await self.db.commit()
+        await self.db.refresh(db_user)
+        return {"detail": f"User deactivated. {bus_count} bus(es) will have driver unlinked." if bus_count else "User deactivated."}

@@ -1,23 +1,46 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from fastapi import HTTPException
 from uuid import uuid4
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from ..database.models.bus import Bus as BusModel
 from ..database.models.school import School as SchoolModel
 from ..database.models.user import User as UserModel
 from ..database.models.bus_location import BusLocation
+from ..database.models.student_bus_assignment import StudentBusAssignment
+from ..database.models.attendance_log import AttendanceLog
 from ..database.schemas.bus import BusCreate, BusUpdate
 
 class BusService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def get_buses(self, skip: int = 0, limit: int = 100) -> List[BusModel]:
-        query = select(BusModel).offset(skip).limit(limit)
+    async def get_buses(
+        self, 
+        skip: int = 0, 
+        limit: int = 100,
+        current_user_org_id: Optional[str] = None
+    ) -> Tuple[List[BusModel], int]:
+        """
+        Get buses with tenant filtering and total count.
+        Returns: (buses, total_count)
+        """
+        query = select(BusModel)
+        count_query = select(func.count()).select_from(BusModel)
+        
+        # Tenant filter
+        if current_user_org_id is not None:
+            query = query.where(BusModel.organization_id == current_user_org_id)
+            count_query = count_query.where(BusModel.organization_id == current_user_org_id)
+        
+        # Get total count
+        total = (await self.db.execute(count_query)).scalar() or 0
+        
+        # Get paginated results
+        query = query.offset(skip).limit(limit)
         result = await self.db.execute(query)
-        return result.scalars().all()
+        return result.scalars().all(), total
 
     async def get_bus_by_id(self, bus_id: str) -> Optional[BusModel]:
         query = select(BusModel).where(BusModel.id == bus_id)
@@ -33,9 +56,13 @@ class BusService:
         if not (await self.db.execute(query)).scalar_one_or_none():
             raise HTTPException(status_code=400, detail="School not found")
 
-        query = select(UserModel).where(UserModel.id == bus.current_driver_id)
-        if not (await self.db.execute(query)).scalar_one_or_none():
-            raise HTTPException(status_code=400, detail="Driver not found")
+        if bus.current_driver_id:
+            query = select(UserModel).where(UserModel.id == bus.current_driver_id)
+            driver = (await self.db.execute(query)).scalar_one_or_none()
+            if not driver:
+                raise HTTPException(status_code=400, detail="Driver not found")
+            if driver.role.value != "sofor":
+                raise HTTPException(status_code=400, detail="User is not a driver (sofor)")
 
         new_bus = BusModel(
             id=str(uuid4()),
@@ -66,8 +93,11 @@ class BusService:
 
         if bus_update.current_driver_id:
             query = select(UserModel).where(UserModel.id == bus_update.current_driver_id)
-            if not (await self.db.execute(query)).scalar_one_or_none():
+            driver = (await self.db.execute(query)).scalar_one_or_none()
+            if not driver:
                 raise HTTPException(status_code=400, detail="Driver not found")
+            if driver.role.value != "sofor":
+                raise HTTPException(status_code=400, detail="User is not a driver (sofor)")
 
         if bus_update.plate_number is not None:
             db_bus.plate_number = bus_update.plate_number
@@ -86,7 +116,17 @@ class BusService:
         db_bus = await self.get_bus_by_id(bus_id)
         if not db_bus:
             raise HTTPException(status_code=404, detail="Bus not found")
-        
+
+        # Check for attendance logs referencing this bus (RESTRICT)
+        query = select(func.count()).select_from(AttendanceLog).where(AttendanceLog.bus_id == bus_id)
+        log_count = (await self.db.execute(query)).scalar()
+        if log_count > 0:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Cannot delete bus: {log_count} attendance log(s) reference it. Archive instead."
+            )
+
+        # student_bus_assignments and bus_locations will CASCADE
         await self.db.delete(db_bus)
         await self.db.commit()
 

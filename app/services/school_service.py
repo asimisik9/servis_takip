@@ -1,14 +1,16 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from fastapi import HTTPException
 from uuid import uuid4
-from typing import List, Optional
-import googlemaps
+from typing import List, Optional, Tuple
+import httpx
 import logging
 
 from ..core.config import settings
 from ..database.models.school import School as SchoolModel
 from ..database.models.user import User as UserModel
+from ..database.models.student import Student as StudentModel
+from ..database.models.bus import Bus as BusModel
 from ..database.schemas.school import SchoolCreate, SchoolUpdate
 
 logger = logging.getLogger(__name__)
@@ -17,30 +19,55 @@ class SchoolService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    def _geocode_address(self, address: str) -> tuple[Optional[float], Optional[float]]:
-        """Convert address to latitude and longitude using Google Maps API"""
+    async def _geocode_address(self, address: str) -> tuple[Optional[float], Optional[float]]:
+        """Convert address to latitude and longitude using Google Maps Geocoding API (async)"""
         if not settings.GOOGLE_MAPS_API_KEY:
             logger.warning("GOOGLE_MAPS_API_KEY not configured, skipping geocoding")
             return None, None
         
-        gmaps = googlemaps.Client(key=settings.GOOGLE_MAPS_API_KEY)
         try:
-            geocode_result = gmaps.geocode(address)
-            if geocode_result:
-                location = geocode_result[0]['geometry']['location']
-                lat, lng = location['lat'], location['lng']
+            url = "https://maps.googleapis.com/maps/api/geocode/json"
+            params = {"address": address, "key": settings.GOOGLE_MAPS_API_KEY}
+            async with httpx.AsyncClient() as client:
+                response = await client.get(url, params=params, timeout=10.0)
+                result = response.json()
+            
+            if result.get("status") == "OK" and result.get("results"):
+                location = result["results"][0]["geometry"]["location"]
+                lat, lng = location["lat"], location["lng"]
                 logger.info(f"Geocoded school address '{address}' -> ({lat}, {lng})")
                 return lat, lng
             else:
-                logger.warning(f"No geocode result for school address: {address}")
+                logger.warning(f"No geocode result for school address: {address} (status: {result.get('status')})")
         except Exception as e:
             logger.error(f"Geocoding error for school address '{address}': {e}")
         return None, None
 
-    async def get_schools(self, skip: int = 0, limit: int = 100) -> List[SchoolModel]:
-        query = select(SchoolModel).offset(skip).limit(limit)
+    async def get_schools(
+        self, 
+        skip: int = 0, 
+        limit: int = 100,
+        current_user_org_id: Optional[str] = None
+    ) -> Tuple[List[SchoolModel], int]:
+        """
+        Get schools with tenant filtering and total count.
+        Returns: (schools, total_count)
+        """
+        query = select(SchoolModel)
+        count_query = select(func.count()).select_from(SchoolModel)
+        
+        # Tenant filter
+        if current_user_org_id is not None:
+            query = query.where(SchoolModel.organization_id == current_user_org_id)
+            count_query = count_query.where(SchoolModel.organization_id == current_user_org_id)
+        
+        # Get total count
+        total = (await self.db.execute(count_query)).scalar() or 0
+        
+        # Get paginated results
+        query = query.offset(skip).limit(limit)
         result = await self.db.execute(query)
-        return result.scalars().all()
+        return result.scalars().all(), total
 
     async def get_school_by_id(self, school_id: str) -> Optional[SchoolModel]:
         query = select(SchoolModel).where(SchoolModel.id == school_id)
@@ -52,8 +79,14 @@ class SchoolService:
         if (await self.db.execute(query)).scalar_one_or_none():
             raise HTTPException(status_code=400, detail="School name already exists")
 
+        # Validate contact person exists
+        if school.contact_person_id:
+            query = select(UserModel).where(UserModel.id == school.contact_person_id)
+            if not (await self.db.execute(query)).scalar_one_or_none():
+                raise HTTPException(status_code=400, detail="Contact person not found")
+
         # Geocode the school address
-        lat, lng = self._geocode_address(school.school_address)
+        lat, lng = await self._geocode_address(school.school_address)
 
         new_school = SchoolModel(
             id=str(uuid4()),
@@ -89,7 +122,7 @@ class SchoolService:
         # If address is updated, re-geocode
         if school_update.school_address is not None and school_update.school_address != db_school.school_address:
             db_school.school_address = school_update.school_address
-            lat, lng = self._geocode_address(school_update.school_address)
+            lat, lng = await self._geocode_address(school_update.school_address)
             db_school.latitude = lat
             db_school.longitude = lng
             logger.info(f"Updated school {school_id} coordinates to ({lat}, {lng})")
@@ -105,7 +138,25 @@ class SchoolService:
         db_school = await self.get_school_by_id(school_id)
         if not db_school:
             raise HTTPException(status_code=404, detail="School not found")
-        
+
+        # Check students referencing this school (RESTRICT)
+        query = select(func.count()).select_from(StudentModel).where(StudentModel.school_id == school_id)
+        student_count = (await self.db.execute(query)).scalar()
+        if student_count > 0:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Cannot delete school: {student_count} student(s) belong to it. Reassign or remove them first."
+            )
+
+        # Check buses referencing this school (RESTRICT)
+        query = select(func.count()).select_from(BusModel).where(BusModel.school_id == school_id)
+        bus_count = (await self.db.execute(query)).scalar()
+        if bus_count > 0:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Cannot delete school: {bus_count} bus(es) belong to it. Reassign or remove them first."
+            )
+
         await self.db.delete(db_school)
         await self.db.commit()
 
@@ -121,7 +172,7 @@ class SchoolService:
         failed = 0
         for school in schools:
             if school.school_address:
-                lat, lng = self._geocode_address(school.school_address)
+                lat, lng = await self._geocode_address(school.school_address)
                 if lat is not None and lng is not None:
                     school.latitude = lat
                     school.longitude = lng
