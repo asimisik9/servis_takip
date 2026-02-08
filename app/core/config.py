@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     
     # Security
     SECRET_KEY: str
+    REFRESH_SECRET_KEY: Optional[str] = None  # Falls back to SECRET_KEY + "_refresh" if not set
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
@@ -23,6 +24,7 @@ class Settings(BaseSettings):
     POSTGRES_DB: str
     POSTGRES_POOL_SIZE: int = 20
     POSTGRES_MAX_OVERFLOW: int = 10
+    POSTGRES_POOL_RECYCLE: int = 1800  # Recycle connections after 30 minutes
     
     # Redis
     REDIS_HOST: str = "redis"
@@ -30,10 +32,27 @@ class Settings(BaseSettings):
     
     # Google Maps
     GOOGLE_MAPS_API_KEY: Optional[str] = None
+    
+    # Firebase Cloud Messaging
+    FIREBASE_CREDENTIALS_PATH: Optional[str] = None  # Path to Firebase service account JSON
 
     # Initial Superuser
     FIRST_SUPERUSER: EmailStr = "admin@example.com"
-    FIRST_SUPERUSER_PASSWORD: str = "Admin123!"
+    FIRST_SUPERUSER_PASSWORD: str  # No default — MUST be set via env var
+    
+    @field_validator("FIREBASE_CREDENTIALS_PATH", mode="after")
+    @classmethod
+    def validate_firebase_path(cls, v: Optional[str], info) -> Optional[str]:
+        """Warn if Firebase credentials not set in production"""
+        import os
+        env = os.getenv("ENVIRONMENT", "development")
+        if env == "production" and not v:
+            import logging
+            logging.getLogger(__name__).warning(
+                "FIREBASE_CREDENTIALS_PATH not set in production! "
+                "Push notifications will not work."
+            )
+        return v
     
     # CORS
     BACKEND_CORS_ORIGINS: List[str] = []

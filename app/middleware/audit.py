@@ -47,7 +47,7 @@ class AuditMiddleware(BaseHTTPMiddleware):
                     action=request.method,
                     endpoint=request.url.path,
                     status_code=response.status_code,
-                    timestamp=datetime.utcnow(),
+                    timestamp=datetime.now(timezone.utc),
                     details=str(request.query_params) if request.query_params else None
                 )
                 session.add(audit_log)

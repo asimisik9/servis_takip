@@ -7,10 +7,11 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy import text
 from contextlib import asynccontextmanager
-from .database import create_tables, models
+from .database import create_tables
 from .database.database import AsyncSessionLocal
 from .database.seed import create_admin_if_not_exists
-from .routers import auth, admin, driver, parent, location_ws
+from .routers import auth, admin, driver, parent, location_ws, notification
+from .tasks import cleanup_old_bus_locations
 from jose import JWTError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
@@ -22,6 +23,7 @@ from .core.exceptions import ResourceNotFoundException, BusinessRuleException
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 import http.client
+import asyncio
 import logging
 
 # Logging Setup
@@ -32,7 +34,25 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Debug CORS origins
-print(f"Loaded BACKEND_CORS_ORIGINS: {settings.BACKEND_CORS_ORIGINS}")
+logger.info(f"Loaded BACKEND_CORS_ORIGINS: {settings.BACKEND_CORS_ORIGINS}")
+
+CLEANUP_INTERVAL_HOURS = 6  # Her 6 saatte bir çalışır
+
+
+async def _periodic_cleanup():
+    """Background task: Her CLEANUP_INTERVAL_HOURS saatte bus_locations temizliği."""
+    while True:
+        try:
+            await asyncio.sleep(CLEANUP_INTERVAL_HOURS * 3600)
+            logger.info("Periodic bus_locations cleanup starting...")
+            deleted = await cleanup_old_bus_locations()
+            logger.info(f"Periodic cleanup finished: {deleted} rows deleted.")
+        except asyncio.CancelledError:
+            logger.info("Periodic cleanup task cancelled.")
+            break
+        except Exception:
+            logger.exception("Periodic cleanup failed, will retry next cycle.")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -50,7 +70,18 @@ async def lifespan(app: FastAPI):
     # Seed initial data
     await create_admin_if_not_exists()
     
+    # Periodic cleanup task
+    cleanup_task = asyncio.create_task(_periodic_cleanup())
+    logger.info("Periodic bus_locations cleanup task scheduled (every %d hours).", CLEANUP_INTERVAL_HOURS)
+    
     yield
+    
+    # Cleanup task'ı durdur
+    cleanup_task.cancel()
+    try:
+        await cleanup_task
+    except asyncio.CancelledError:
+        pass
     
     # Redis bağlantısını kapat
     await redis_manager.close()
@@ -66,20 +97,32 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# Audit Middleware (Inner - runs after CORS)
-# app.add_middleware(AuditMiddleware)
+# Audit Middleware - KVKK/GDPR compliance (Inner - runs after CORS)
+app.add_middleware(AuditMiddleware)
 
 # HTTPS Redirect (Production only)
 if settings.ENVIRONMENT == "production":
     app.add_middleware(HTTPSRedirectMiddleware)
 
-# CORS middleware
+# CORS middleware - Production requires explicit origins
+if settings.BACKEND_CORS_ORIGINS:
+    origins = settings.BACKEND_CORS_ORIGINS
+else:
+    if settings.ENVIRONMENT == "production":
+        raise ValueError(
+            "BACKEND_CORS_ORIGINS must be set in production! "
+            "Add allowed origins to .env file."
+        )
+    # Development fallback
+    origins = ["*"]
+    logger.warning("CORS: Using wildcard origins in development mode")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # Allow all origins for development
+    allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With"],
 )
 
 # Include routers with prefix to ensure 401 instead of 404
@@ -87,6 +130,7 @@ app.include_router(auth.router, prefix=settings.API_V1_STR)
 app.include_router(driver.router, prefix=settings.API_V1_STR)
 app.include_router(parent.router, prefix=settings.API_V1_STR)
 app.include_router(admin.router, prefix=settings.API_V1_STR)
+app.include_router(notification.router, prefix=settings.API_V1_STR)
 app.include_router(location_ws.router)
 
 # Health Checks
