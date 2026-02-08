@@ -22,15 +22,31 @@ async def save_location_to_db(bus_id: str, data: dict):
                 bus_id=bus_id,
                 latitude=data['latitude'],
                 longitude=data['longitude'],
-                speed=data.get('speed', 0),
-                timestamp=datetime.utcnow()
+                speed=data.get('speed'),
+                timestamp=datetime.now(timezone.utc)
             )
             db.add(new_location)
             await db.commit()
     except Exception as e:
-        logger.error(f"Error saving location to DB: {e}")
-        with open("db_error.log", "a") as f:
-            f.write(f"Error saving location: {e}\n")
+        logger.error(f"Error saving location to DB for bus {bus_id}: {e}")
+
+
+def _validate_location_data(data: dict) -> bool:
+    """Validate incoming WebSocket location data."""
+    try:
+        lat = data.get('latitude')
+        lng = data.get('longitude')
+        if lat is None or lng is None:
+            return False
+        lat, lng = float(lat), float(lng)
+        if not (-90 <= lat <= 90) or not (-180 <= lng <= 180):
+            return False
+        speed = data.get('speed')
+        if speed is not None and (not isinstance(speed, (int, float)) or speed < 0 or speed > 300):
+            return False
+        return True
+    except (TypeError, ValueError):
+        return False
 
 @router.websocket("/ws/driver/location")
 async def driver_location_ws(
@@ -45,7 +61,7 @@ async def driver_location_ws(
     # Bu sayede "Connection not upgraded" hatası yerine anlamlı bir WS kapanış kodu döneriz.
     await websocket.accept()
     
-    logger.info(f"WS Connection accepted. Verifying token: {token[:20]}...")
+    logger.info("WS Connection accepted. Verifying token...")
     
     try:
         async with AsyncSessionLocal() as db:
@@ -58,38 +74,47 @@ async def driver_location_ws(
                 return
                 
             if user.role.value != "sofor":
-                logger.warning(f"WS Closing: User {user.email} is not a driver")
+                logger.warning(f"WS Closing: User {user.id} is not a driver")
                 await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
                 return
 
             bus = await service.get_driver_bus(user.id)
             if not bus:
-                logger.warning(f"WS Closing: Driver {user.email} has no bus assigned")
+                logger.warning(f"WS Closing: Driver {user.id} has no bus assigned")
                 await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
                 return
                 
             bus_id = bus.id
-            logger.info(f"WS Verified: Driver {user.email} for Bus {bus.plate_number} ({bus_id})")
+            logger.info(f"WS Verified: Driver {user.id} for Bus {bus_id}")
 
         redis = await redis_manager.get_redis()
         channel_name = f"bus:{bus_id}:location"
+        
+        # Track background tasks to prevent GC and handle exceptions
+        _background_tasks: set[asyncio.Task] = set()
         
         try:
             while True:
                 data = await websocket.receive_text()
                 try:
                     json_data = json.loads(data)
-                    logger.info(f"Received location from driver {user.id} for bus {bus_id}: {json_data}")
+                    
+                    if not _validate_location_data(json_data):
+                        logger.warning(f"Invalid location data from driver {user.id}")
+                        continue
+                    
+                    logger.info(f"Received location from driver {user.id} for bus {bus_id}")
                     
                     # Redis kanalına yayınla
                     await redis.publish(channel_name, json.dumps(json_data))
                     
-                    # Veritabanına kaydet (Asenkron olarak, bekletmeden)
-                    asyncio.create_task(save_location_to_db(bus_id, json_data))
+                    # Veritabanına kaydet (arka planda, referansı tutarak)
+                    task = asyncio.create_task(save_location_to_db(bus_id, json_data))
+                    _background_tasks.add(task)
+                    task.add_done_callback(_background_tasks.discard)
                     
                 except json.JSONDecodeError:
                     logger.error(f"Invalid JSON received from driver {user.id}")
-                    pass
         except WebSocketDisconnect:
             logger.info(f"Driver {user.id} disconnected from WS")
             pass
@@ -113,7 +138,7 @@ async def bus_location_ws(
     Otobüs konumu için WebSocket bağlantısı.
     Redis Pub/Sub kullanarak ölçeklenebilir yapı.
     """
-    logger.info(f"Bus WS Connection attempt. Bus: {bus_id}, Token: {token[:20]}...")
+    logger.info(f"Bus WS Connection attempt. Bus: {bus_id}")
     await websocket.accept()
     
     try:
@@ -129,11 +154,11 @@ async def bus_location_ws(
 
             # Yetki kontrolü
             if not await service.validate_ws_access(user, bus_id):
-                logger.warning(f"Bus WS Closing: User {user.email} not authorized for bus {bus_id}")
+                logger.warning(f"Bus WS Closing: User {user.id} not authorized for bus {bus_id}")
                 await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
                 return
             
-            logger.info(f"Bus WS Verified: User {user.email} listening to Bus {bus_id}")
+            logger.info(f"Bus WS Verified: User {user.id} listening to Bus {bus_id}")
 
             # Send last known location immediately
             try:
@@ -175,6 +200,7 @@ async def bus_location_ws(
 
         # Redis dinleyicisini arka plan görevi olarak başlat
         redis_reader_task = asyncio.create_task(forward_redis_to_ws())
+        _background_tasks: set[asyncio.Task] = set()
 
         try:
             while True:
@@ -183,17 +209,21 @@ async def bus_location_ws(
                 
                 # Eğer gönderen şoför ise, konumu Redis'e yayınla
                 if user.role.value == "sofor":
-                    # Veriyi doğrula (basitçe JSON olup olmadığına bakıyoruz)
+                    # Veriyi doğrula
                     try:
                         json_data = json.loads(data)
-                        # Timestamp ekle veya güncelle
-                        # json_data["server_timestamp"] = ...
+                        
+                        if not _validate_location_data(json_data):
+                            logger.warning(f"Invalid location data from driver {user.id}")
+                            continue
                         
                         # Redis kanalına yayınla
                         await redis.publish(channel_name, json.dumps(json_data))
                         
-                        # TODO: Burada veriyi asenkron olarak veritabanına da kaydetmeliyiz
-                        # await save_location_to_db(bus_id, json_data)
+                        # Veritabanına da kaydet
+                        task = asyncio.create_task(save_location_to_db(bus_id, json_data))
+                        _background_tasks.add(task)
+                        task.add_done_callback(_background_tasks.discard)
                         
                     except json.JSONDecodeError:
                         pass

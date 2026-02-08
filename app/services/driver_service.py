@@ -78,6 +78,7 @@ class DriverService:
             bus_id=bus.id,
             latitude=location.latitude,
             longitude=location.longitude,
+            speed=location.speed,
             timestamp=datetime.now(timezone.utc)
         )
         self.db.add(new_location)

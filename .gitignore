@@ -1,11 +1,47 @@
 # Python artifacts
 __pycache__/
 *.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
 
 # Virtual environments
 venv/
-.env/
+.venv/
+env/
+
+# Environment variables (CRITICAL — contains secrets)
+.env
+.env.*
+!.env.example
+
+# Firebase / Google credentials (CRITICAL)
+firebase-service-account.json
+*-service-account.json
+google-services.json
+GoogleService-Info.plist
 
 # Local runtime files
 *.sqlite3
 instance/
+
+# Logs
+*.log
+db_error.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Docker
+docker-compose.override.yml
+
+# Database dumps
+*.dump
+
+# OS
+.DS_Store
+Thumbs.db

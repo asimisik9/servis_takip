@@ -1,11 +1,11 @@
 from datetime import datetime
 from typing import Optional, List
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 class SchoolBase(BaseModel):
     """Base schema for School"""
-    school_name: str
-    school_address: str
+    school_name: str = Field(..., min_length=1, max_length=200)
+    school_address: str = Field(..., min_length=1, max_length=500)
     contact_person_id: str
 
 class SchoolCreate(SchoolBase):
@@ -14,8 +14,8 @@ class SchoolCreate(SchoolBase):
 
 class SchoolUpdate(BaseModel):
     """Schema for updating a School"""
-    school_name: Optional[str] = None
-    school_address: Optional[str] = None
+    school_name: Optional[str] = Field(None, min_length=1, max_length=200)
+    school_address: Optional[str] = Field(None, min_length=1, max_length=500)
     contact_person_id: Optional[str] = None
 
 class School(SchoolBase):

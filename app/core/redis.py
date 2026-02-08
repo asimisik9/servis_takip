@@ -1,6 +1,9 @@
 import redis.asyncio as redis
 from .config import settings
 from typing import Optional, Any
+import logging
+
+logger = logging.getLogger(__name__)
 
 class RedisManager:
     def __init__(self):
@@ -13,12 +16,12 @@ class RedisManager:
             decode_responses=True
         )
         await self.redis.ping()
-        print("Redis bağlantısı başarılı.")
+        logger.info("Redis bağlantısı başarılı.")
 
     async def close(self):
         if self.redis:
             await self.redis.close()
-            print("Redis bağlantısı kapatıldı.")
+            logger.info("Redis bağlantısı kapatıldı.")
 
     async def get_redis(self) -> redis.Redis:
         if not self.redis:
@@ -44,13 +47,14 @@ class RedisManager:
         return await self.redis.delete(key)
     
     async def delete_pattern(self, pattern: str) -> int:
-        """Delete all keys matching pattern"""
+        """Delete all keys matching pattern using SCAN (non-blocking)"""
         if not self.redis:
             await self.connect()
-        keys = await self.redis.keys(pattern)
-        if keys:
-            return await self.redis.delete(*keys)
-        return 0
+        deleted = 0
+        async for key in self.redis.scan_iter(match=pattern, count=100):
+            await self.redis.delete(key)
+            deleted += 1
+        return deleted
 
 redis_manager = RedisManager()
 

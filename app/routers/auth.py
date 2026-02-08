@@ -3,7 +3,6 @@ from fastapi.security import OAuth2PasswordRequestForm
 from typing import Annotated
 from ..database.schemas.user import User, UserCreate
 from pydantic import BaseModel
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..dependencies import (
     get_db, 
@@ -30,7 +29,9 @@ class LoginResponse(BaseModel):
     user: User
 
 @router.post("/register", response_model=User, status_code=status.HTTP_201_CREATED)
+@limiter.limit("3/minute")
 async def register(
+    request: Request,
     user_data: UserCreate,
     auth_service: AuthService = Depends(get_auth_service)
 ):
@@ -50,12 +51,12 @@ async def login(
     """
     Kullanıcı girişi yapar ve JWT token döndürür.
     """
-    logger.info(f"Login attempt - Username: {form_data.username}")
+    logger.info("Login attempt received")
     
     user = await auth_service.authenticate_user(form_data.username, form_data.password)
     
     if not user:
-        logger.warning(f"Authentication failed for: {form_data.username}")
+        logger.warning("Authentication failed for a login attempt")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
@@ -91,7 +92,9 @@ async def logout(
     return {"message": "Successfully logged out"}
 
 @router.post("/refresh", response_model=LoginResponse)
+@limiter.limit("10/minute")
 async def refresh_token(
+    request: Request,
     refresh_token: str = Body(..., embed=True),
     auth_service: AuthService = Depends(get_auth_service)
 ):

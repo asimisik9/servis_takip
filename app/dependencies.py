@@ -4,22 +4,22 @@ from fastapi.security import OAuth2PasswordBearer
 from jose import jwt, JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+import logging
 
 from .database.database import AsyncSessionLocal
 from .database.models.user import User as UserModel, UserRole
-from .database.models.token_blacklist import TokenBlacklist
 from .database.schemas.user import User
 from .core.security import SECRET_KEY, ALGORITHM
 from .core.config import settings
+from .core.redis import redis_manager
 from .services.auth_service import AuthService
+
+logger = logging.getLogger(__name__)
 
 # Database dependency
 async def get_db():
     async with AsyncSessionLocal() as session:
-        try:
-            yield session
-        finally:
-            await session.close()
+        yield session
 
 def get_auth_service(db: AsyncSession = Depends(get_db)) -> AuthService:
     return AuthService(db)
@@ -32,6 +32,7 @@ async def get_current_user(
 ):
     """
     JWT token'dan kullanıcı bilgilerini çıkarır.
+    Token blacklist kontrolü Redis üzerinden yapılır.
     """
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -39,16 +40,41 @@ async def get_current_user(
         headers={"WWW-Authenticate": "Bearer"},
     )
     
-    # Check if token is blacklisted
-    query = select(TokenBlacklist).where(TokenBlacklist.token == token)
-    result = await db.execute(query)
-    if result.scalar_one_or_none():
+    # Check if token is blacklisted (Redis — O(1) lookup)
+    is_blacklisted = await redis_manager.get(f"blacklist:{token}")
+    if is_blacklisted:
         raise credentials_exception
+    
+    # Fallback: Check DB blacklist if Redis missed (e.g. after Redis restart)
+    if not is_blacklisted:
+        try:
+            from .database.models.token_blacklist import TokenBlacklist
+            from datetime import datetime, timezone
+            stmt = select(TokenBlacklist).where(
+                TokenBlacklist.token == token,
+                TokenBlacklist.expires_at > datetime.now(timezone.utc)
+            )
+            result = await db.execute(stmt)
+            if result.scalar_one_or_none():
+                # Re-populate Redis so subsequent checks are fast
+                try:
+                    await redis_manager.set(f"blacklist:{token}", "1", ex=3600)
+                except Exception:
+                    pass
+                raise credentials_exception
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.warning(f"DB blacklist check failed: {e}")
 
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email: str = payload.get("sub")
+        token_type: str = payload.get("type")
         if email is None:
+            raise credentials_exception
+        # Ensure this is an access token, not a refresh token
+        if token_type != "access":
             raise credentials_exception
     except JWTError:
         raise credentials_exception
@@ -60,6 +86,13 @@ async def get_current_user(
     
     if not user:
         raise credentials_exception
+    
+    # Check if user account is deactivated
+    if hasattr(user, 'is_active') and not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account is deactivated"
+        )
     
     return User.model_validate(user)
 

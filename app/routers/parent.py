@@ -1,15 +1,16 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from typing import List, Annotated
 from datetime import date
-from app.database.schemas.user import User
-from app.database.schemas.student import Student, StudentAddressUpdate
-from app.database.schemas.bus_location import BusLocation
-from app.database.schemas.attendance_log import AttendanceLog
-from app.database.schemas.dashboard import DashboardResponse
+from ..database.schemas.user import User
+from ..database.schemas.student import Student, StudentAddressUpdate
+from ..database.schemas.bus_location import BusLocation
+from ..database.schemas.attendance_log import AttendanceLog
+from ..database.schemas.dashboard import DashboardResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..dependencies import get_db, get_current_parent_user
 from ..services.parent_service import ParentService
+from ..core.limiter import limiter
 
 router = APIRouter(
     prefix="/parent",
@@ -80,7 +81,9 @@ async def get_student_dashboard(
     return await service.get_student_dashboard_data(current_user.id, student_id)
 
 @router.post("/students/{student_id}/absent")
+@limiter.limit("10/minute")
 async def report_student_absence(
+    request: Request,
     student_id: str,
     current_user: Annotated[User, Depends(get_current_parent_user)],
     db: AsyncSession = Depends(get_db)

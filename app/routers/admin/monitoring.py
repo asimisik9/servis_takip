@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from typing import List, Annotated
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import date
@@ -28,8 +28,8 @@ async def get_attendance_logs(
     end_date: date = None,
     bus_id: str = None,
     student_id: str = None,
-    skip: int = 0,
-    limit: int = 100
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=500)
 ):
     service = AttendanceService(db)
     return await service.get_attendance_logs(start_date, end_date, bus_id, student_id, skip, limit)

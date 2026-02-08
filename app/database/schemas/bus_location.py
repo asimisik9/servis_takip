@@ -7,7 +7,7 @@ class BusLocationBase(BaseModel):
     bus_id: str
     latitude: float = Field(..., ge=-90, le=90)
     longitude: float = Field(..., ge=-180, le=180)
-    speed: float = Field(..., ge=0)
+    speed: Optional[float] = Field(None, ge=0)
 
 class BusLocationCreate(BusLocationBase):
     """Schema for creating a new BusLocation"""

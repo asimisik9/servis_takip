@@ -7,7 +7,7 @@ class BusBase(BaseModel):
     plate_number: str
     capacity: int = Field(gt=0)  # positive integer validation
     school_id: str
-    current_driver_id: str
+    current_driver_id: Optional[str] = None
 
 class BusCreate(BusBase):
     """Schema for creating a new Bus"""

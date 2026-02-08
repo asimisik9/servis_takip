@@ -4,13 +4,14 @@ Route optimization service using Google Maps API
 Optimizes the order of student pickups for a bus route
 """
 
+import asyncio
 import logging
 from typing import List, Dict, Optional, Tuple, Set
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 import googlemaps
-from datetime import datetime
+from datetime import datetime, timezone
 
 from ..database.models.bus import Bus as BusModel
 from ..database.models.student_bus_assignment import StudentBusAssignment
@@ -107,7 +108,7 @@ class RouteService:
                 stops=[],
                 total_distance_meters=0,
                 total_duration_seconds=0,
-                generated_at=datetime.utcnow()
+                generated_at=datetime.now(timezone.utc)
             )
         
         # Get school coordinates (needed for both trip types)
@@ -146,7 +147,7 @@ class RouteService:
                 destination=(RoutePoint(latitude=destination[0], longitude=destination[1]) if destination else None),
                 total_distance_meters=0,
                 total_duration_seconds=0,
-                generated_at=datetime.utcnow()
+                generated_at=datetime.now(timezone.utc)
             )
         
         # Cache the route for 30 minutes (1800 seconds)
@@ -274,7 +275,7 @@ class RouteService:
         if not self.gmaps_client:
             return None
         try:
-            geocode = self.gmaps_client.geocode(school.school_address)
+            geocode = await asyncio.to_thread(self.gmaps_client.geocode, school.school_address)
             if geocode and len(geocode) > 0:
                 loc = geocode[0]["geometry"]["location"]
                 lat, lng = loc["lat"], loc["lng"]
@@ -360,7 +361,7 @@ class RouteService:
                 stops=stops,
                 total_distance_meters=0,
                 total_duration_seconds=0,
-                generated_at=datetime.utcnow()
+                generated_at=datetime.now(timezone.utc)
             )
         
         try:
@@ -371,7 +372,9 @@ class RouteService:
             )
             
             # Call Google Maps Directions API with waypoint optimization
-            result = self.gmaps_client.directions(
+            # C5: Wrap sync googlemaps call to avoid blocking the event loop
+            result = await asyncio.to_thread(
+                self.gmaps_client.directions,
                 origin=origin,
                 destination=destination,
                 waypoints=waypoints,
@@ -386,7 +389,7 @@ class RouteService:
                     stops=stops,
                     total_distance_meters=0,
                     total_duration_seconds=0,
-                    generated_at=datetime.utcnow()
+                    generated_at=datetime.now(timezone.utc)
                 )
             
             # Extract optimization information
@@ -432,7 +435,7 @@ class RouteService:
                 destination=RoutePoint(latitude=destination[0], longitude=destination[1]),
                 total_distance_meters=total_distance,
                 total_duration_seconds=total_duration,
-                generated_at=datetime.utcnow(),
+                generated_at=datetime.now(timezone.utc),
                 overview_polyline=optimized_route_info.get("overview_polyline", {}).get("points")
             )
             
@@ -461,7 +464,7 @@ class RouteService:
                 destination=RoutePoint(latitude=destination[0], longitude=destination[1]) if destination else None,
                 total_distance_meters=0,
                 total_duration_seconds=0,
-                generated_at=datetime.utcnow(),
+                generated_at=datetime.now(timezone.utc),
                 overview_polyline=fallback_polyline
             )
         except Exception as e:
@@ -473,15 +476,15 @@ class RouteService:
                 destination=RoutePoint(latitude=destination[0], longitude=destination[1]) if destination else None,
                 total_distance_meters=0,
                 total_duration_seconds=0,
-                generated_at=datetime.utcnow()
+                generated_at=datetime.now(timezone.utc)
             )
     
     async def invalidate_route_cache(self, bus_id: str) -> None:
-        """Invalidate cached route for a bus"""
+        """Invalidate all cached routes for a bus (pattern-based)"""
         try:
-            cache_key = f"route:{bus_id}"
-            await redis_manager.delete(cache_key)
-            logger.info(f"Route cache invalidated for bus {bus_id}")
+            pattern = f"route:{bus_id}:*"
+            await redis_manager.delete_pattern(pattern)
+            logger.info(f"Route cache invalidated for bus {bus_id} (pattern: {pattern})")
         except Exception as e:
             logger.error(f"Failed to invalidate cache for bus {bus_id}: {str(e)}")
     

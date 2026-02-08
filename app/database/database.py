@@ -1,6 +1,9 @@
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 from ..core.config import settings
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Asenkron veritabanı motorunu oluşturun
 # Production için pool ayarları
@@ -9,6 +12,7 @@ engine = create_async_engine(
     echo=settings.ENVIRONMENT == "development",
     pool_size=settings.POSTGRES_POOL_SIZE,
     max_overflow=settings.POSTGRES_MAX_OVERFLOW,
+    pool_recycle=settings.POSTGRES_POOL_RECYCLE,
     pool_pre_ping=True
 )
 
@@ -20,9 +24,9 @@ class Base(DeclarativeBase):
 
 # Tüm tabloları oluşturmak için kullanılacak fonksiyon
 async def create_tables():
-    print("Veritabanı tabloları oluşturuluyor...")
+    logger.info("Veritabanı tabloları oluşturuluyor...")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    print("Veritabanı tabloları başarıyla oluşturuldu.")
+    logger.info("Veritabanı tabloları başarıyla oluşturuldu.")
     
     

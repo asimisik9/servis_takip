@@ -31,7 +31,7 @@ async def create_admin_if_not_exists():
                 )
                 db.add(admin)
                 await db.commit()
-                logger.info(f"Admin user created successfully: {settings.FIRST_SUPERUSER}")
+                logger.info("Admin user created successfully.")
             else:
                 logger.info("Admin user already exists.")
         except Exception as e:

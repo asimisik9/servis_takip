@@ -4,18 +4,22 @@ from fastapi import HTTPException, status
 from datetime import datetime, timezone
 from uuid import uuid4
 from jose import jwt, JWTError
+import logging
 
 from ..database.models.user import User as UserModel
-from ..database.models.token_blacklist import TokenBlacklist
 from ..database.schemas.user import UserCreate
 from ..core.security import (
     hash_password, 
     verify_password, 
     create_access_token, 
     create_refresh_token,
-    SECRET_KEY, 
+    SECRET_KEY,
+    REFRESH_SECRET_KEY,
     ALGORITHM
 )
+from ..core.redis import redis_manager
+
+logger = logging.getLogger(__name__)
 
 class AuthService:
     def __init__(self, db: AsyncSession):
@@ -35,19 +39,35 @@ class AuthService:
             raise HTTPException(status_code=400, detail="Phone number already registered")
         
         hashed_password = hash_password(user_data.password)
+        
+        # Public registration is only allowed for 'veli' role.
+        # Admin and driver accounts must be created by an admin.
+        from ..database.models.user import UserRole
+        if user_data.role and user_data.role.value != UserRole.veli.value:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Public registration is only allowed for 'veli' role. Contact an admin for other roles."
+            )
+        
         new_user = UserModel(
             id=str(uuid4()),
             full_name=user_data.full_name,
             email=user_data.email,
             phone_number=user_data.phone_number,
             password_hash=hashed_password,
-            role=user_data.role,
+            role=UserRole.veli,  # Always veli for public registration
             created_at=datetime.now(timezone.utc)
         )
         
-        self.db.add(new_user)
-        await self.db.commit()
-        await self.db.refresh(new_user)
+        try:
+            self.db.add(new_user)
+            await self.db.commit()
+            await self.db.refresh(new_user)
+        except Exception as e:
+            await self.db.rollback()
+            if "unique" in str(e).lower() or "duplicate" in str(e).lower():
+                raise HTTPException(status_code=400, detail="Email or phone number already registered")
+            raise
         return new_user
 
     async def authenticate_user(self, email: str, password: str):
@@ -59,6 +79,11 @@ class AuthService:
             return None
         if not verify_password(password, user.password_hash):
             return None
+        if hasattr(user, 'is_active') and not user.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Account is deactivated. Contact an administrator."
+            )
             
         return user
 
@@ -72,17 +97,57 @@ class AuthService:
         refresh_token = create_refresh_token(token_data)
         return access_token, refresh_token
 
+    async def _blacklist_token(self, token: str, exp_timestamp: int):
+        """Add token to Redis blacklist with TTL matching token expiry.
+        Also persists to DB as fallback if Redis restarts."""
+        now = int(datetime.now(timezone.utc).timestamp())
+        ttl = max(exp_timestamp - now, 0)
+        
+        # Primary: Redis (fast, auto-expires)
+        redis_ok = False
+        if ttl > 0:
+            try:
+                await redis_manager.set(f"blacklist:{token}", "1", ex=ttl)
+                redis_ok = True
+            except Exception as e:
+                logger.error(f"Failed to blacklist token in Redis: {e}")
+        
+        # Secondary: DB persistence (survives Redis restart)
+        try:
+            from ..database.models.token_blacklist import TokenBlacklist
+            from ..database.database import AsyncSessionLocal
+            
+            async with AsyncSessionLocal() as db:
+                blacklisted = TokenBlacklist(
+                    token=token,
+                    expires_at=datetime.fromtimestamp(exp_timestamp, tz=timezone.utc),
+                    created_at=datetime.now(timezone.utc)
+                )
+                db.add(blacklisted)
+                await db.commit()
+        except Exception as e:
+            logger.error(f"Failed to persist blacklisted token to DB: {e}")
+            if not redis_ok:
+                logger.critical("Token blacklist failed in BOTH Redis and DB! Token remains valid.")
+
     async def logout(self, token: str):
         try:
-            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-            exp = payload.get("exp")
-            expires_at = datetime.fromtimestamp(exp, tz=timezone.utc)
+            # Try decoding as access token first, then refresh
+            try:
+                payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            except JWTError:
+                payload = jwt.decode(token, REFRESH_SECRET_KEY, algorithms=[ALGORITHM])
             
-            blacklist_token = TokenBlacklist(token=token, expires_at=expires_at)
-            self.db.add(blacklist_token)
-            await self.db.commit()
-        except Exception:
-            pass # Fail silently
+            exp = payload.get("exp", 0)
+            await self._blacklist_token(token, exp)
+        except JWTError:
+            pass  # Token already expired or invalid — no need to blacklist
+        except Exception as e:
+            logger.error(f"Unexpected error during logout: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Logout failed. Please try again."
+            )
 
     async def refresh_token(self, refresh_token: str):
         credentials_exception = HTTPException(
@@ -91,16 +156,19 @@ class AuthService:
             headers={"WWW-Authenticate": "Bearer"},
         )
         
-        # Check blacklist
-        query = select(TokenBlacklist).where(TokenBlacklist.token == refresh_token)
-        result = await self.db.execute(query)
-        if result.scalar_one_or_none():
+        # Check blacklist in Redis
+        is_blacklisted = await redis_manager.get(f"blacklist:{refresh_token}")
+        if is_blacklisted:
             raise credentials_exception
             
         try:
-            payload = jwt.decode(refresh_token, SECRET_KEY, algorithms=[ALGORITHM])
+            payload = jwt.decode(refresh_token, REFRESH_SECRET_KEY, algorithms=[ALGORITHM])
             email: str = payload.get("sub")
+            token_type: str = payload.get("type")
             if email is None:
+                raise credentials_exception
+            # Ensure this is actually a refresh token
+            if token_type != "refresh":
                 raise credentials_exception
         except JWTError:
             raise credentials_exception
@@ -112,7 +180,7 @@ class AuthService:
         if not user:
             raise credentials_exception
             
-        # Blacklist old token
+        # Blacklist old refresh token
         await self.logout(refresh_token)
         
         return await self.create_tokens(user), user

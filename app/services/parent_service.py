@@ -92,9 +92,9 @@ class ParentService:
         if filter_date:
             start = datetime.combine(filter_date, datetime.min.time())
             end = datetime.combine(filter_date, datetime.max.time())
-            query = query.where(AttendanceLog.timestamp >= start, AttendanceLog.timestamp <= end)
+            query = query.where(AttendanceLog.log_time >= start, AttendanceLog.log_time <= end)
             
-        query = query.order_by(AttendanceLog.timestamp.desc())
+        query = query.order_by(AttendanceLog.log_time.desc())
         result = await self.db.execute(query)
         return result.scalars().all()
 
@@ -273,7 +273,10 @@ class ParentService:
             logger.error(f"Failed to calculate ETA: {str(e)}")
             return None
 
-    async def report_absence(self, parent_id: str, student_id: str):
+    async def report_absence(self, parent_id: str, student_id: str, absence_date: Optional[date] = None, reason: Optional[str] = None):
+        from uuid import uuid4
+        from ..database.models.absence import Absence
+        
         # Check relation
         query = select(ParentStudentRelation).where(
             ParentStudentRelation.parent_id == parent_id,
@@ -281,8 +284,32 @@ class ParentService:
         )
         if not (await self.db.execute(query)).scalar_one_or_none():
             raise HTTPException(status_code=404, detail="Student not found or not your child")
-            
-        # In a real application, we would save this to an Absence table
-        # and notify the driver/admin.
-        # For now, we just return success.
-        return True
+        
+        target_date = absence_date or date.today()
+        
+        # Check if already reported for this date
+        from sqlalchemy import and_
+        existing = await self.db.execute(
+            select(Absence).where(
+                and_(
+                    Absence.student_id == student_id,
+                    Absence.absence_date == target_date
+                )
+            )
+        )
+        if existing.scalar_one_or_none():
+            raise HTTPException(status_code=400, detail="Absence already reported for this date")
+        
+        absence = Absence(
+            id=str(uuid4()),
+            student_id=student_id,
+            parent_id=parent_id,
+            absence_date=target_date,
+            reason=reason
+        )
+        self.db.add(absence)
+        await self.db.commit()
+        await self.db.refresh(absence)
+        
+        logger.info(f"Absence reported: student={student_id}, date={target_date}, parent={parent_id}")
+        return absence

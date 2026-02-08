@@ -68,6 +68,8 @@ class UserUpdate(BaseModel):
 class User(UserBase):
     """Schema for User responses"""
     id: str
+    is_active: bool = True
+    organization_id: Optional[str] = None
     created_at: datetime
 
     class Config:

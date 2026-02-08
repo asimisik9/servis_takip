@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, status, Query
 from typing import List, Annotated
 from sqlalchemy.ext.asyncio import AsyncSession
 from urllib.parse import unquote
@@ -45,18 +45,22 @@ async def assign_driver_to_bus(
 @router.get("/assignments/student-bus", response_model=List[StudentBusAssignment])
 async def list_student_bus_assignments(
     current_user: Annotated[User, Depends(get_current_admin_user)],
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=500)
 ):
     service = AssignmentService(db)
-    return await service.get_student_bus_assignments()
+    return await service.get_student_bus_assignments(skip=skip, limit=limit)
 
 @router.get("/assignments/parent-student", response_model=List[ParentStudentRelation])
 async def list_parent_student_relations(
     current_user: Annotated[User, Depends(get_current_admin_user)],
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=500)
 ):
     service = AssignmentService(db)
-    return await service.get_parent_student_relations()
+    return await service.get_parent_student_relations(skip=skip, limit=limit)
 
 @router.delete("/assignments/student-bus/{assignment_id}", status_code=status.HTTP_200_OK)
 async def delete_student_bus_assignment(

@@ -1,9 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from typing import List, Annotated
-from datetime import date
 from ..database.schemas.user import User
 from ..database.schemas.student import Student
-from ..database.schemas.attendance_log import AttendanceLogCreate, AttendanceLog, AttendanceLogRequest
+from ..database.schemas.attendance_log import AttendanceLog, AttendanceLogRequest
 from ..database.schemas.bus_location import BusLocationCreate, BusLocation
 from ..database.schemas.route import OptimizedRouteResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +11,7 @@ from ..dependencies import get_db, get_current_driver_user
 from ..services.driver_service import DriverService
 from ..services.route_service import RouteService
 from ..services.route_progress_service import RouteProgressService
+from ..core.limiter import limiter
 
 router = APIRouter(
     prefix="/driver",
@@ -21,8 +21,7 @@ router = APIRouter(
 @router.get("/me/roster", response_model=List[Student])
 async def get_driver_roster(
     current_user: Annotated[User, Depends(get_current_driver_user)],
-    db: AsyncSession = Depends(get_db),
-    date: date = None
+    db: AsyncSession = Depends(get_db)
 ):
     """
     Şoförün sorumlu olduğu servisteki öğrenci listesini getirir.
@@ -31,7 +30,9 @@ async def get_driver_roster(
     return await service.get_roster(current_user.id)
 
 @router.post("/attendance/log", response_model=AttendanceLog)
+@limiter.limit("120/minute")
 async def create_attendance_log(
+    request: Request,
     attendance: AttendanceLogRequest,
     current_user: Annotated[User, Depends(get_current_driver_user)],
     db: AsyncSession = Depends(get_db)
@@ -43,7 +44,9 @@ async def create_attendance_log(
     return await service.create_attendance_log(current_user.id, attendance)
 
 @router.post("/buses/me/location", response_model=BusLocation)
+@limiter.limit("30/minute")
 async def update_bus_location(
+    request: Request,
     location: BusLocationCreate,
     current_user: Annotated[User, Depends(get_current_driver_user)],
     db: AsyncSession = Depends(get_db)
@@ -119,7 +122,7 @@ async def get_driver_bus_route(
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to calculate route: {str(e)}"
+            detail="Failed to calculate route. Please try again later."
         )
 
 
