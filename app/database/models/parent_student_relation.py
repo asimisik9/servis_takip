@@ -1,7 +1,7 @@
 # app/models/parent_student_relation.py
 from __future__ import annotations
 from typing import TYPE_CHECKING
-from sqlalchemy import String, ForeignKey
+from sqlalchemy import String, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..database import Base
@@ -13,9 +13,12 @@ if TYPE_CHECKING:
 
 class ParentStudentRelation(Base):
     __tablename__ = "parent_student_relations"
+    __table_args__ = (
+        UniqueConstraint('parent_id', 'student_id', name='uq_parent_student'),
+    )
     id: Mapped[str] = mapped_column(String, primary_key=True)
-    parent_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
-    student_id: Mapped[str] = mapped_column(ForeignKey("students.id"))
+    parent_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    student_id: Mapped[str] = mapped_column(ForeignKey("students.id", ondelete="CASCADE"))
 
     # İlişkiler
     parent: Mapped["User"] = relationship(

@@ -4,6 +4,8 @@
 from ..database import Base
 
 # Her bir model dosyasını import ederek Base'in onlara erişmesini sağlayın
+from .organization import Organization, OrganizationType
+from .school_company_contract import SchoolCompanyContract
 from .user import User, UserRole
 from .school import School
 from .student import Student
@@ -12,6 +14,8 @@ from .parent_student_relation import ParentStudentRelation
 from .student_bus_assignment import StudentBusAssignment
 from .attendance_log import AttendanceLog, AttendanceStatus
 from .bus_location import BusLocation
-from .notification import Notification, NotificationStatus
+from .notification import Notification, NotificationStatus, NotificationType
 from .audit_log import AuditLog
 from .token_blacklist import TokenBlacklist
+from .absence import Absence
+

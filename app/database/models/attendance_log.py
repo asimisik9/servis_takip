@@ -19,9 +19,9 @@ class AttendanceStatus(enum.Enum):
 class AttendanceLog(Base):
     __tablename__ = "attendance_logs"
     id: Mapped[str] = mapped_column(String, primary_key=True)
-    student_id: Mapped[str] = mapped_column(ForeignKey("students.id"))
-    driver_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
-    bus_id: Mapped[str] = mapped_column(ForeignKey("buses.id"))
+    student_id: Mapped[str] = mapped_column(ForeignKey("students.id", ondelete="CASCADE"))
+    driver_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    bus_id: Mapped[str] = mapped_column(ForeignKey("buses.id", ondelete="RESTRICT"))
     status: Mapped[AttendanceStatus] = mapped_column(Enum(AttendanceStatus))
     latitude: Mapped[float] = mapped_column(DECIMAL(10, 8))
     longitude: Mapped[float] = mapped_column(DECIMAL(11, 8))

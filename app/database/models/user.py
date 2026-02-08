@@ -1,13 +1,14 @@
 # app/models/user.py
 
-from sqlalchemy import String, Enum, DateTime
+from sqlalchemy import String, Enum, DateTime, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from datetime import datetime, timezone
 import enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 from ..database import Base
 
 if TYPE_CHECKING:
+    from .organization import Organization
     from .school import School
     from .bus import Bus
     from .parent_student_relation import ParentStudentRelation
@@ -27,9 +28,21 @@ class User(Base):
     phone_number: Mapped[str] = mapped_column(String, unique=True)
     password_hash: Mapped[str] = mapped_column(String)
     role: Mapped[UserRole] = mapped_column(Enum(UserRole), default=UserRole.veli)
+    fcm_token: Mapped[str | None] = mapped_column(String, nullable=True)
+    is_active: Mapped[bool] = mapped_column(default=True)
+    # Multi-tenancy: NULL = super-admin (platform yöneticisi), değer = tenant kullanıcısı
+    organization_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("organizations.id", ondelete="SET NULL"), 
+        nullable=True,
+        index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, onupdate=lambda: datetime.now(timezone.utc))
 
     # İlişkiler
+    organization: Mapped[Optional["Organization"]] = relationship(
+        "Organization", back_populates="users"
+    )
     schools_contact_person: Mapped[list["School"]] = relationship(
         "School", back_populates="contact_person"
     )

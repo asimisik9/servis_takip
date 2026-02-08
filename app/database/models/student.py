@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from sqlalchemy import String, ForeignKey, DateTime, Float
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from datetime import datetime
+from datetime import datetime, timezone
 
 from ..database import Base
 
@@ -19,11 +19,11 @@ class Student(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True)
     full_name: Mapped[str] = mapped_column(String)
     student_number: Mapped[str] = mapped_column(String, unique=True)
-    school_id: Mapped[str] = mapped_column(ForeignKey("schools.id"))
+    school_id: Mapped[str] = mapped_column(ForeignKey("schools.id", ondelete="RESTRICT"))
     address: Mapped[str | None] = mapped_column(String, nullable=True)
     latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     
     # İlişkiler
     school: Mapped["School"] = relationship(
