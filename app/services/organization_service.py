@@ -53,14 +53,20 @@ class OrganizationService:
         org_type: Optional[OrganizationType] = None,
         skip: int = 0, 
         limit: int = 100
-    ) -> List[OrganizationModel]:
-        """Tüm organizasyonları listele"""
-        query = select(OrganizationModel)
+    ):
+        """Tüm organizasyonları listele (items, total) tuple döner"""
+        base_query = select(OrganizationModel)
         if org_type:
-            query = query.where(OrganizationModel.type == org_type)
-        query = query.order_by(OrganizationModel.name).offset(skip).limit(limit)
+            base_query = base_query.where(OrganizationModel.type == org_type)
+        
+        # Count total
+        count_query = select(func.count()).select_from(base_query.subquery())
+        total = (await self.db.execute(count_query)).scalar() or 0
+        
+        # Fetch items
+        query = base_query.order_by(OrganizationModel.name).offset(skip).limit(limit)
         result = await self.db.execute(query)
-        return result.scalars().all()
+        return result.scalars().all(), total
 
     async def update_organization(self, org_id: str, data: OrganizationUpdate) -> OrganizationModel:
         """Organization güncelle"""

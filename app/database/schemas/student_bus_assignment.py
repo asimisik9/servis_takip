@@ -18,6 +18,8 @@ class StudentBusAssignmentUpdate(BaseModel):
 class StudentBusAssignment(StudentBusAssignmentBase):
     """Schema for StudentBusAssignment responses"""
     id: str
+    student: Optional["StudentBase"] = None
+    bus: Optional["BusBase"] = None
 
     class Config:
         """Pydantic configuration"""
@@ -26,6 +28,17 @@ class StudentBusAssignment(StudentBusAssignmentBase):
             "example": {
                 "id": "1",
                 "bus_id": "bus123",
-                "student_id": "student123"
+                "student_id": "student123",
+                "student": {
+                    "first_name": "Ali",
+                    "last_name": "Veli",
+                    "student_number": "1234"
+                },
+                "bus": {
+                    "plate_number": "06 ABC 123"
+                }
             }
         }
+
+from .student import StudentBase
+from .bus import BusBase

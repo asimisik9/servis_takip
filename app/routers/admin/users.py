@@ -33,7 +33,7 @@ async def create_user(
     db: AsyncSession = Depends(get_db)
 ):
     service = UserService(db)
-    return await service.create_user(user)
+    return await service.create_user(user, current_user_org_id=current_user.organization_id)
 
 @router.get("/users/{user_id}", response_model=User)
 async def get_user(
@@ -45,6 +45,11 @@ async def get_user(
     user = await service.get_user_by_id(unquote(user_id))
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+        
+    # Manual tenant check for read
+    if current_user.organization_id and user.organization_id != current_user.organization_id:
+         raise HTTPException(status_code=404, detail="User not found")
+         
     return user
 
 @router.put("/users/{user_id}", response_model=User)
@@ -55,7 +60,11 @@ async def update_user(
     db: AsyncSession = Depends(get_db)
 ):
     service = UserService(db)
-    return await service.update_user(unquote(user_id), user)
+    return await service.update_user(
+        unquote(user_id), 
+        user,
+        current_user_org_id=current_user.organization_id
+    )
 
 @router.delete("/users/{user_id}", status_code=status.HTTP_200_OK)
 async def delete_user(
@@ -64,5 +73,9 @@ async def delete_user(
     db: AsyncSession = Depends(get_db)
 ):
     service = UserService(db)
-    await service.delete_user(unquote(user_id), current_user.id)
+    await service.delete_user(
+        unquote(user_id), 
+        current_user.id,
+        current_user_org_id=current_user.organization_id
+    )
     return {"detail": "User deleted successfully"}

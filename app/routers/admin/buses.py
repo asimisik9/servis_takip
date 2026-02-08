@@ -18,14 +18,18 @@ async def list_buses(
     current_user: Annotated[User, Depends(get_current_admin_user)],
     db: AsyncSession = Depends(get_db),
     skip: int = Query(default=0, ge=0),
-    limit: int = Query(default=20, ge=1, le=100)
+    limit: int = Query(default=20, ge=1, le=100),
+    school_id: Annotated[str | None, Query()] = None
 ):
     """List buses with tenant filtering and pagination."""
     service = BusService(db)
+    org_type = current_user.organization.type.value if current_user.organization else None
     buses, total = await service.get_buses(
         skip=skip, 
         limit=limit, 
-        current_user_org_id=current_user.organization_id
+        current_user_org_id=current_user.organization_id,
+        current_user_org_type=org_type,
+        school_id=school_id
     )
     return PaginatedResponse(items=buses, total=total, skip=skip, limit=limit)
 
@@ -36,7 +40,7 @@ async def create_bus(
     db: AsyncSession = Depends(get_db)
 ):
     service = BusService(db)
-    return await service.create_bus(bus)
+    return await service.create_bus(bus, current_user_org_id=current_user.organization_id)
 
 @router.put("/buses/{bus_id}", response_model=Bus)
 async def update_bus(
@@ -46,7 +50,26 @@ async def update_bus(
     db: AsyncSession = Depends(get_db)
 ):
     service = BusService(db)
-    return await service.update_bus(unquote(bus_id), bus)
+    return await service.update_bus(
+        unquote(bus_id), 
+        bus,
+        current_user_org_id=current_user.organization_id
+    )
+
+@router.get("/buses/{bus_id}", response_model=Bus)
+async def get_bus(
+    bus_id: str,
+    current_user: Annotated[User, Depends(get_current_admin_user)],
+    db: AsyncSession = Depends(get_db)
+):
+    service = BusService(db)
+    bus = await service.get_bus_by_id(unquote(bus_id))
+    if not bus:
+        raise HTTPException(status_code=404, detail="Bus not found")
+    # Tenant check
+    if current_user.organization_id and bus.organization_id != current_user.organization_id:
+        raise HTTPException(status_code=404, detail="Bus not found")
+    return bus
 
 @router.delete("/buses/{bus_id}", status_code=status.HTTP_200_OK)
 async def delete_bus(
@@ -55,7 +78,10 @@ async def delete_bus(
     db: AsyncSession = Depends(get_db)
 ):
     service = BusService(db)
-    await service.delete_bus(unquote(bus_id))
+    await service.delete_bus(
+        unquote(bus_id),
+        current_user_org_id=current_user.organization_id
+    )
     return {"detail": "Bus deleted successfully"}
 
 @router.get("/buses/{bus_id}/route", response_model=OptimizedRouteResponse)

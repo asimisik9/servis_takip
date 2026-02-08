@@ -18,7 +18,8 @@ if TYPE_CHECKING:
 class UserRole(enum.Enum):
     veli = "veli"
     sofor = "sofor"
-    admin = "admin"
+    admin = "admin"  # Organizasyon admin'i (okul veya servis şirketi yöneticisi)
+    super_admin = "super_admin"  # Platform yöneticisi (tüm organizasyonları yönetebilir)
     
 class User(Base):
     __tablename__ = "users"
@@ -58,4 +59,9 @@ class User(Base):
     notifications: Mapped[list["Notification"]] = relationship(
         "Notification", back_populates="recipient"
     )
+
+    @property
+    def organization_name(self) -> str | None:
+        """Computed property: organization name from relationship."""
+        return self.organization.name if self.organization else None
     

@@ -1,11 +1,12 @@
 # app/routers/admin/organizations.py
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional, List
 from datetime import date
 
-from ...dependencies import get_db, get_current_admin_user
+from ...dependencies import get_db, get_current_admin_user, get_current_super_admin
 from ...database.schemas.user import User
+from ...database.models.user import UserRole
 from ...database.schemas.organization import (
     OrganizationType,
     Organization,
@@ -14,6 +15,7 @@ from ...database.schemas.organization import (
     SchoolCompanyContract,
     SchoolCompanyContractCreate,
 )
+from ...database.schemas.common import PaginatedResponse
 from ...services.organization_service import OrganizationService
 
 router = APIRouter(prefix="/organizations", tags=["Organizations"])
@@ -28,24 +30,17 @@ def get_organization_service(db: AsyncSession = Depends(get_db)) -> Organization
 @router.post("", response_model=Organization)
 async def create_organization(
     data: OrganizationCreate,
-    current_user: User = Depends(get_current_admin_user),
+    current_user: User = Depends(get_current_super_admin),
     service: OrganizationService = Depends(get_organization_service)
 ):
     """
     Yeni organization oluştur (okul veya servis şirketi).
-    Sadece super-admin kullanabilir.
+    Sadece super_admin kullanabilir.
     """
-    # Only super-admin (organization_id=None) can create organizations
-    if current_user.organization_id is not None:
-        from fastapi import HTTPException
-        raise HTTPException(
-            status_code=403, 
-            detail="Only super-admin can create organizations"
-        )
     return await service.create_organization(data)
 
 
-@router.get("", response_model=List[Organization])
+@router.get("", response_model=PaginatedResponse[Organization])
 async def list_organizations(
     org_type: Optional[OrganizationType] = Query(None, description="Filter by type"),
     skip: int = Query(0, ge=0),
@@ -60,8 +55,9 @@ async def list_organizations(
     # Tenant admin can only see their own organization
     if current_user.organization_id is not None:
         org = await service.get_organization(current_user.organization_id)
-        return [org]
-    return await service.get_organizations(org_type=org_type, skip=skip, limit=limit)
+        return PaginatedResponse(items=[org], total=1, skip=0, limit=limit)
+    organizations, total = await service.get_organizations(org_type=org_type, skip=skip, limit=limit)
+    return PaginatedResponse(items=organizations, total=total, skip=skip, limit=limit)
 
 
 @router.get("/{org_id}", response_model=Organization)
@@ -100,14 +96,10 @@ async def update_organization(
 @router.delete("/{org_id}")
 async def delete_organization(
     org_id: str,
-    current_user: User = Depends(get_current_admin_user),
+    current_user: User = Depends(get_current_super_admin),
     service: OrganizationService = Depends(get_organization_service)
 ):
-    """Organization sil (soft delete). Sadece super-admin."""
-    if current_user.organization_id is not None:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=403, detail="Only super-admin can delete organizations")
-    
+    """Organization sil (soft delete). Sadece super_admin."""
     await service.delete_organization(org_id)
     return {"message": "Organization deleted successfully"}
 
@@ -117,16 +109,13 @@ async def delete_organization(
 @router.post("/contracts", response_model=SchoolCompanyContract)
 async def create_contract(
     data: SchoolCompanyContractCreate,
-    current_user: User = Depends(get_current_admin_user),
+    current_user: User = Depends(get_current_super_admin),
     service: OrganizationService = Depends(get_organization_service)
 ):
     """
     Okul-Servis şirketi sözleşmesi oluştur.
-    Sadece super-admin kullanabilir.
+    Sadece super_admin kullanabilir.
     """
-    if current_user.organization_id is not None:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=403, detail="Only super-admin can create contracts")
     return await service.create_contract(data)
 
 
@@ -166,13 +155,10 @@ async def list_contracts(
 @router.delete("/contracts/{contract_id}")
 async def terminate_contract(
     contract_id: str,
-    current_user: User = Depends(get_current_admin_user),
+    current_user: User = Depends(get_current_super_admin),
     service: OrganizationService = Depends(get_organization_service)
 ):
-    """Sözleşmeyi sonlandır. Sadece super-admin."""
-    if current_user.organization_id is not None:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=403, detail="Only super-admin can terminate contracts")
-    
+    """Sözleşmeyi sonlandır. Sadece super_admin."""
     await service.terminate_contract(contract_id)
     return {"message": "Contract terminated successfully"}
+

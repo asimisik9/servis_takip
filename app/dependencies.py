@@ -80,7 +80,8 @@ async def get_current_user(
         raise credentials_exception
     
     # Get user from database
-    query = select(UserModel).where(UserModel.email == email)
+    from sqlalchemy.orm import selectinload
+    query = select(UserModel).options(selectinload(UserModel.organization)).where(UserModel.email == email)
     result = await db.execute(query)
     user = result.scalar_one_or_none()
     
@@ -109,6 +110,11 @@ class RoleChecker:
         return user
 
 # Role dependencies
-get_current_admin_user = RoleChecker(["admin"])
+# super_admin veya admin (organizasyon admin'i) - admin paneli erişimi
+get_current_admin_user = RoleChecker(["admin", "super_admin"])
+# Sadece super_admin - platform seviyesi işlemler (organizasyon yönetimi)
+get_current_super_admin = RoleChecker(["super_admin"])
+# Driver ve parent - mobil uygulama kullanıcıları
 get_current_driver_user = RoleChecker(["sofor"])
 get_current_parent_user = RoleChecker(["veli"])
+

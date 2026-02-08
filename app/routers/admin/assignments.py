@@ -7,6 +7,7 @@ from ...database.schemas.user import User
 from ...database.schemas.student_bus_assignment import StudentBusAssignment
 from ...database.schemas.parent_student_relation import ParentStudentRelation
 from ...database.schemas.bus import Bus
+from ...database.schemas.common import PaginatedResponse
 from ...dependencies import get_db, get_current_admin_user
 from ...services.assignment_service import AssignmentService
 
@@ -20,7 +21,11 @@ async def assign_parent_to_student(
     db: AsyncSession = Depends(get_db)
 ):
     service = AssignmentService(db)
-    return await service.assign_parent_to_student(unquote(student_id), parent_id)
+    return await service.assign_parent_to_student(
+        unquote(student_id), 
+        parent_id,
+        current_user_org_id=current_user.organization_id
+    )
 
 @router.post("/students/{student_id}/assign-bus", response_model=StudentBusAssignment)
 async def assign_bus_to_student(
@@ -30,7 +35,11 @@ async def assign_bus_to_student(
     db: AsyncSession = Depends(get_db)
 ):
     service = AssignmentService(db)
-    return await service.assign_bus_to_student(unquote(student_id), bus_id)
+    return await service.assign_bus_to_student(
+        unquote(student_id), 
+        bus_id,
+        current_user_org_id=current_user.organization_id
+    )
 
 @router.post("/buses/{bus_id}/assign-driver", response_model=Bus)
 async def assign_driver_to_bus(
@@ -40,9 +49,13 @@ async def assign_driver_to_bus(
     db: AsyncSession = Depends(get_db)
 ):
     service = AssignmentService(db)
-    return await service.assign_driver_to_bus(unquote(bus_id), driver_id)
+    return await service.assign_driver_to_bus(
+        unquote(bus_id), 
+        driver_id,
+        current_user_org_id=current_user.organization_id
+    )
 
-@router.get("/assignments/student-bus", response_model=List[StudentBusAssignment])
+@router.get("/assignments/student-bus", response_model=PaginatedResponse[StudentBusAssignment])
 async def list_student_bus_assignments(
     current_user: Annotated[User, Depends(get_current_admin_user)],
     db: AsyncSession = Depends(get_db),
@@ -50,9 +63,16 @@ async def list_student_bus_assignments(
     limit: int = Query(default=100, ge=1, le=500)
 ):
     service = AssignmentService(db)
-    return await service.get_student_bus_assignments(skip=skip, limit=limit)
+    org_type = current_user.organization.type.value if current_user.organization else None
+    assignments, total = await service.get_student_bus_assignments(
+        skip=skip, 
+        limit=limit,
+        current_user_org_id=current_user.organization_id,
+        current_user_org_type=org_type
+    )
+    return PaginatedResponse(items=assignments, total=total, skip=skip, limit=limit)
 
-@router.get("/assignments/parent-student", response_model=List[ParentStudentRelation])
+@router.get("/assignments/parent-student", response_model=PaginatedResponse[ParentStudentRelation])
 async def list_parent_student_relations(
     current_user: Annotated[User, Depends(get_current_admin_user)],
     db: AsyncSession = Depends(get_db),
@@ -60,7 +80,14 @@ async def list_parent_student_relations(
     limit: int = Query(default=100, ge=1, le=500)
 ):
     service = AssignmentService(db)
-    return await service.get_parent_student_relations(skip=skip, limit=limit)
+    org_type = current_user.organization.type.value if current_user.organization else None
+    relations, total = await service.get_parent_student_relations(
+        skip=skip, 
+        limit=limit,
+        current_user_org_id=current_user.organization_id,
+        current_user_org_type=org_type
+    )
+    return PaginatedResponse(items=relations, total=total, skip=skip, limit=limit)
 
 @router.delete("/assignments/student-bus/{assignment_id}", status_code=status.HTTP_200_OK)
 async def delete_student_bus_assignment(
@@ -69,7 +96,10 @@ async def delete_student_bus_assignment(
     db: AsyncSession = Depends(get_db)
 ):
     service = AssignmentService(db)
-    await service.delete_student_bus_assignment(unquote(assignment_id))
+    await service.delete_student_bus_assignment(
+        unquote(assignment_id),
+        current_user_org_id=current_user.organization_id
+    )
     return {"detail": "Assignment deleted successfully"}
 
 @router.delete("/assignments/parent-student/{relation_id}", status_code=status.HTTP_200_OK)
@@ -79,5 +109,8 @@ async def delete_parent_student_relation(
     db: AsyncSession = Depends(get_db)
 ):
     service = AssignmentService(db)
-    await service.delete_parent_student_relation(unquote(relation_id))
+    await service.delete_parent_student_relation(
+        unquote(relation_id),
+        current_user_org_id=current_user.organization_id
+    )
     return {"detail": "Relation deleted successfully"}

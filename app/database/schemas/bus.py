@@ -23,6 +23,9 @@ class BusUpdate(BaseModel):
 class Bus(BusBase):
     """Schema for Bus responses"""
     id: str
+    current_driver: Optional["UserBase"] = None
+    school_name: Optional[str] = None
+    driver_name: Optional[str] = None
 
     class Config:
         """Pydantic configuration"""
@@ -33,6 +36,14 @@ class Bus(BusBase):
                 "plate_number": "06 ABC 123",
                 "capacity": 30,
                 "school_id": "school123",
-                "current_driver_id": "driver123"
+                "current_driver_id": "driver123",
+                "current_driver": {
+                    "first_name": "Ahmet",
+                    "last_name": "Yılmaz",
+                    "email": "ahmet@example.com",
+                    "role": "sofor"
+                }
             }
         }
+
+from .user import UserBase

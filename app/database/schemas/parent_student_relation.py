@@ -18,6 +18,8 @@ class ParentStudentRelationUpdate(BaseModel):
 class ParentStudentRelation(ParentStudentRelationBase):
     """Schema for ParentStudentRelation responses"""
     id: str
+    student: Optional["StudentBase"] = None
+    parent: Optional["UserBase"] = None
 
     class Config:
         """Pydantic configuration"""
@@ -26,6 +28,17 @@ class ParentStudentRelation(ParentStudentRelationBase):
             "example": {
                 "id": "1",
                 "parent_id": "parent123",
-                "student_id": "student123"
+                "student_id": "student123",
+                "student": {
+                    "first_name": "Ali",
+                    "last_name": "Veli"
+                },
+                "parent": {
+                    "first_name": "Ayşe",
+                    "last_name": "Veli"
+                }
             }
         }
+
+from .student import StudentBase
+from .user import UserBase

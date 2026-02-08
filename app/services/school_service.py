@@ -1,5 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
+from sqlalchemy.orm import selectinload
 from fastapi import HTTPException
 from uuid import uuid4
 from typing import List, Optional, Tuple
@@ -53,7 +54,7 @@ class SchoolService:
         Get schools with tenant filtering and total count.
         Returns: (schools, total_count)
         """
-        query = select(SchoolModel)
+        query = select(SchoolModel).options(selectinload(SchoolModel.contact_person))
         count_query = select(func.count()).select_from(SchoolModel)
         
         # Tenant filter
@@ -70,7 +71,9 @@ class SchoolService:
         return result.scalars().all(), total
 
     async def get_school_by_id(self, school_id: str) -> Optional[SchoolModel]:
-        query = select(SchoolModel).where(SchoolModel.id == school_id)
+        query = select(SchoolModel).options(
+            selectinload(SchoolModel.contact_person)
+        ).where(SchoolModel.id == school_id)
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
 

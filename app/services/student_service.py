@@ -44,11 +44,13 @@ class StudentService:
         self, 
         skip: int = 0, 
         limit: int = 100,
-        current_user_org_id: Optional[str] = None
+        current_user_org_id: Optional[str] = None,
+        school_id: Optional[str] = None
     ) -> Tuple[List[StudentModel], int]:
         """
         Get students with tenant filtering and total count.
         Filters by school's organization_id when current_user has org.
+        Optionally filters by specific school_id.
         Returns: (students, total_count)
         """
         query = select(StudentModel).options(selectinload(StudentModel.school))
@@ -58,6 +60,15 @@ class StudentService:
         if current_user_org_id is not None:
             query = query.join(SchoolModel).where(SchoolModel.organization_id == current_user_org_id)
             count_query = count_query.join(SchoolModel).where(SchoolModel.organization_id == current_user_org_id)
+            
+        # Specific School Filter
+        if school_id:
+            query = query.where(StudentModel.school_id == school_id)
+            # If we already joined SchoolModel above, we don't need to join again, but for safety in count query:
+            if current_user_org_id is None: # If not joined yet
+                 count_query = count_query.where(StudentModel.school_id == school_id)
+            else:
+                 count_query = count_query.where(StudentModel.school_id == school_id)
         
         # Get total count
         total = (await self.db.execute(count_query)).scalar() or 0
@@ -72,15 +83,19 @@ class StudentService:
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
 
-    async def create_student(self, student: StudentCreate) -> StudentModel:
+    async def create_student(self, student: StudentCreate, current_user_org_id: Optional[str] = None) -> StudentModel:
         query = select(StudentModel).where(StudentModel.student_number == student.student_number)
         if (await self.db.execute(query)).scalar_one_or_none():
             raise HTTPException(status_code=400, detail="Student number already exists")
 
-        # Validate school exists
+        # Validate school exists and verify tenant
         query = select(SchoolModel).where(SchoolModel.id == student.school_id)
-        if not (await self.db.execute(query)).scalar_one_or_none():
-            raise HTTPException(status_code=400, detail="School not found")
+        if current_user_org_id:
+            query = query.where(SchoolModel.organization_id == current_user_org_id)
+            
+        school = (await self.db.execute(query)).scalar_one_or_none()
+        if not school:
+            raise HTTPException(status_code=400, detail="School not found or access denied")
 
         lat, lng = None, None
         if student.address:
@@ -100,10 +115,14 @@ class StudentService:
         await self.db.refresh(new_student)
         return await self.get_student_by_id(new_student.id)
 
-    async def update_student(self, student_id: str, student_update: StudentUpdate) -> StudentModel:
-        db_student = await self.get_student_by_id(student_id)
+    async def update_student(self, student_id: str, student_update: StudentUpdate, current_user_org_id: Optional[str] = None) -> StudentModel:
+        query = select(StudentModel).options(selectinload(StudentModel.school)).where(StudentModel.id == student_id)
+        if current_user_org_id:
+            query = query.join(SchoolModel).where(SchoolModel.organization_id == current_user_org_id)
+            
+        db_student = (await self.db.execute(query)).scalar_one_or_none()
         if not db_student:
-            raise HTTPException(status_code=404, detail="Student not found")
+            raise HTTPException(status_code=404, detail="Student not found or access denied")
 
         if student_update.student_number and student_update.student_number != db_student.student_number:
             query = select(StudentModel).where(StudentModel.student_number == student_update.student_number)
@@ -112,8 +131,11 @@ class StudentService:
 
         if student_update.school_id:
             query = select(SchoolModel).where(SchoolModel.id == student_update.school_id)
+            if current_user_org_id:
+                query = query.where(SchoolModel.organization_id == current_user_org_id)
+                
             if not (await self.db.execute(query)).scalar_one_or_none():
-                raise HTTPException(status_code=400, detail="School not found")
+                raise HTTPException(status_code=400, detail="School not found or access denied")
 
         address_changed = False
         if student_update.address is not None:
@@ -139,10 +161,14 @@ class StudentService:
         
         return await self.get_student_by_id(db_student.id)
 
-    async def delete_student(self, student_id: str):
-        db_student = await self.get_student_by_id(student_id)
+    async def delete_student(self, student_id: str, current_user_org_id: Optional[str] = None):
+        query = select(StudentModel).options(selectinload(StudentModel.school)).where(StudentModel.id == student_id)
+        if current_user_org_id:
+            query = query.join(SchoolModel).where(SchoolModel.organization_id == current_user_org_id)
+            
+        db_student = (await self.db.execute(query)).scalar_one_or_none()
         if not db_student:
-            raise HTTPException(status_code=404, detail="Student not found")
+            raise HTTPException(status_code=404, detail="Student not found or access denied")
 
         # Check attendance logs (RESTRICT via FK)
         query = select(func.count()).select_from(AttendanceLog).where(AttendanceLog.student_id == student_id)

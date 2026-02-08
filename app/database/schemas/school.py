@@ -23,6 +23,7 @@ class School(SchoolBase):
     id: str
     latitude: Optional[float] = None
     longitude: Optional[float] = None
+    contact_person_name: Optional[str] = None
 
     class Config:
         """Pydantic configuration"""

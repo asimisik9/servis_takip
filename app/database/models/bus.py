@@ -48,3 +48,11 @@ class Bus(Base):
     bus_locations: Mapped[list["BusLocation"]] = relationship(
         "BusLocation", back_populates="bus"
     )
+
+    @property
+    def school_name(self) -> str | None:
+        return self.school.school_name if self.school else None
+
+    @property
+    def driver_name(self) -> str | None:
+        return self.current_driver.full_name if self.current_driver else None

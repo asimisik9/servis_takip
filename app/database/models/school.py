@@ -39,3 +39,7 @@ class School(Base):
     buses: Mapped[list["Bus"]] = relationship(
         "Bus", back_populates="school"
     )
+
+    @property
+    def contact_person_name(self) -> str | None:
+        return self.contact_person.full_name if self.contact_person else None

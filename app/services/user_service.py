@@ -1,5 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
+from sqlalchemy.orm import selectinload
 from fastapi import HTTPException, status
 from uuid import uuid4
 from typing import List, Optional, Tuple
@@ -28,7 +29,7 @@ class UserService:
         current_user_org_id: None = super-admin (sees all), value = tenant admin (filtered)
         Returns: (users, total_count)
         """
-        query = select(UserModel)
+        query = select(UserModel).options(selectinload(UserModel.organization))
         count_query = select(func.count()).select_from(UserModel)
         
         # Tenant filter
@@ -45,11 +46,11 @@ class UserService:
         return result.scalars().all(), total
 
     async def get_user_by_id(self, user_id: str) -> Optional[UserModel]:
-        query = select(UserModel).where(UserModel.id == user_id)
+        query = select(UserModel).options(selectinload(UserModel.organization)).where(UserModel.id == user_id)
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
 
-    async def create_user(self, user: UserCreate) -> UserModel:
+    async def create_user(self, user: UserCreate, current_user_org_id: Optional[str] = None) -> UserModel:
         # Check email
         query = select(UserModel).where(UserModel.email == user.email)
         if (await self.db.execute(query)).scalar_one_or_none():
@@ -60,23 +61,33 @@ class UserService:
         if (await self.db.execute(query)).scalar_one_or_none():
             raise HTTPException(status_code=400, detail="Phone number already registered")
 
+        # Determine organization_id
+        # If created by tenant admin -> forced to their org
+        # If created by super admin -> can specify org_id in request
+        org_id = current_user_org_id if current_user_org_id else user.organization_id
+
         new_user = UserModel(
             id=str(uuid4()),
             full_name=user.full_name,
             email=user.email,
             phone_number=user.phone_number,
             password_hash=hash_password(user.password),
-            role=user.role
+            role=user.role,
+            organization_id=org_id
         )
         self.db.add(new_user)
         await self.db.commit()
         await self.db.refresh(new_user)
         return new_user
 
-    async def update_user(self, user_id: str, user_update: UserUpdate) -> UserModel:
-        db_user = await self.get_user_by_id(user_id)
+    async def update_user(self, user_id: str, user_update: UserUpdate, current_user_org_id: Optional[str] = None) -> UserModel:
+        query = select(UserModel).where(UserModel.id == user_id)
+        if current_user_org_id:
+            query = query.where(UserModel.organization_id == current_user_org_id)
+            
+        db_user = (await self.db.execute(query)).scalar_one_or_none()
         if not db_user:
-            raise HTTPException(status_code=404, detail="User not found")
+            raise HTTPException(status_code=404, detail="User not found or access denied")
 
         if user_update.email and user_update.email != db_user.email:
             query = select(UserModel).where(UserModel.email == user_update.email)
@@ -98,6 +109,11 @@ class UserService:
             if db_user.role != user_update.role:
                 logger.warning(f"Role change: user={user_id} from={db_user.role.value} to={user_update.role}")
             db_user.role = user_update.role
+        
+        # Only Super Admin (current_user_org_id is None) can change organization info
+        if user_update.organization_id is not None and current_user_org_id is None:
+            db_user.organization_id = user_update.organization_id
+            
         if user_update.password is not None:
             db_user.password_hash = hash_password(user_update.password)
 
@@ -105,13 +121,17 @@ class UserService:
         await self.db.refresh(db_user)
         return db_user
 
-    async def delete_user(self, user_id: str, current_user_id: str):
+    async def delete_user(self, user_id: str, current_user_id: str, current_user_org_id: Optional[str] = None):
         if user_id == current_user_id:
             raise HTTPException(status_code=400, detail="Admin cannot delete themselves")
             
-        db_user = await self.get_user_by_id(user_id)
+        query = select(UserModel).where(UserModel.id == user_id)
+        if current_user_org_id:
+            query = query.where(UserModel.organization_id == current_user_org_id)
+            
+        db_user = (await self.db.execute(query)).scalar_one_or_none()
         if not db_user:
-            raise HTTPException(status_code=404, detail="User not found")
+            raise HTTPException(status_code=404, detail="User not found or access denied")
 
         # Check if user is a contact person for any school (RESTRICT)
         query = select(func.count()).select_from(SchoolModel).where(SchoolModel.contact_person_id == user_id)

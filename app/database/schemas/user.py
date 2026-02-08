@@ -8,6 +8,7 @@ class UserRole(str, Enum):
     veli = "veli"
     sofor = "sofor"
     admin = "admin"
+    super_admin = "super_admin"
 
 class UserBase(BaseModel):
     """Base schema for User"""
@@ -28,6 +29,7 @@ class UserBase(BaseModel):
 class UserCreate(UserBase):
     """Schema for creating a new User"""
     password: str
+    organization_id: Optional[str] = None # Allow specifying org (e.g. for super admin creating tenant admin)
 
     @field_validator('password')
     @classmethod
@@ -49,6 +51,7 @@ class UserUpdate(BaseModel):
     phone_number: Optional[str] = None
     role: Optional[UserRole] = None
     password: Optional[str] = None
+    organization_id: Optional[str] = None
 
     @field_validator('password')
     @classmethod
@@ -70,6 +73,8 @@ class User(UserBase):
     id: str
     is_active: bool = True
     organization_id: Optional[str] = None
+    organization_name: Optional[str] = None
+    organization: Optional["Organization"] = None
     created_at: datetime
 
     class Config:
@@ -82,6 +87,12 @@ class User(UserBase):
                 "email": "ahmet@example.com",
                 "phone_number": "+905551234567",
                 "role": "Parent",
-                "created_at": "2025-10-14T10:00:00"
+                "created_at": "2025-10-14T10:00:00",
+                "organization": {
+                    "name": "Atatürk İlkokulu",
+                    "type": "school"
+                }
             }
         }
+
+from .organization import Organization
