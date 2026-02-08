@@ -1,24 +1,31 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, status, Query, HTTPException
 from typing import List, Annotated
 from sqlalchemy.ext.asyncio import AsyncSession
 from urllib.parse import unquote
 
 from ...database.schemas.user import User
 from ...database.schemas.school import School, SchoolCreate, SchoolUpdate
+from ...database.schemas.common import PaginatedResponse
 from ...dependencies import get_db, get_current_admin_user
 from ...services.school_service import SchoolService
 
 router = APIRouter(tags=["admin-schools"])
 
-@router.get("/schools", response_model=List[School])
+@router.get("/schools", response_model=PaginatedResponse[School])
 async def list_schools(
     current_user: Annotated[User, Depends(get_current_admin_user)],
     db: AsyncSession = Depends(get_db),
-    skip: int = 0,
-    limit: int = 100
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=100)
 ):
+    """List schools with tenant filtering and pagination."""
     service = SchoolService(db)
-    return await service.get_schools(skip, limit)
+    schools, total = await service.get_schools(
+        skip=skip, 
+        limit=limit, 
+        current_user_org_id=current_user.organization_id
+    )
+    return PaginatedResponse(items=schools, total=total, skip=skip, limit=limit)
 
 @router.post("/schools", response_model=School, status_code=status.HTTP_201_CREATED)
 async def create_school(
@@ -36,7 +43,10 @@ async def get_school(
     db: AsyncSession = Depends(get_db)
 ):
     service = SchoolService(db)
-    return await service.get_school_by_id(unquote(school_id))
+    school = await service.get_school_by_id(unquote(school_id))
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
+    return school
 
 @router.put("/schools/{school_id}", response_model=School)
 async def update_school(

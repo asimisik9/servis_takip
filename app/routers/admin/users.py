@@ -1,23 +1,30 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, status, Query, HTTPException
 from typing import List, Annotated
 from sqlalchemy.ext.asyncio import AsyncSession
 from urllib.parse import unquote
 
 from ...database.schemas.user import User, UserCreate, UserUpdate
+from ...database.schemas.common import PaginatedResponse
 from ...dependencies import get_db, get_current_admin_user
 from ...services.user_service import UserService
 
 router = APIRouter(tags=["admin-users"])
 
-@router.get("/users", response_model=List[User])
+@router.get("/users", response_model=PaginatedResponse[User])
 async def list_users(
     current_user: Annotated[User, Depends(get_current_admin_user)],
     db: AsyncSession = Depends(get_db),
-    skip: int = 0,
-    limit: int = 100
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=100)
 ):
+    """List users with tenant filtering and pagination."""
     service = UserService(db)
-    return await service.get_users(skip, limit)
+    users, total = await service.get_users(
+        skip=skip, 
+        limit=limit, 
+        current_user_org_id=current_user.organization_id
+    )
+    return PaginatedResponse(items=users, total=total, skip=skip, limit=limit)
 
 @router.post("/users", response_model=User, status_code=status.HTTP_201_CREATED)
 async def create_user(
@@ -35,7 +42,10 @@ async def get_user(
     db: AsyncSession = Depends(get_db)
 ):
     service = UserService(db)
-    return await service.get_user_by_id(unquote(user_id))
+    user = await service.get_user_by_id(unquote(user_id))
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
 
 @router.put("/users/{user_id}", response_model=User)
 async def update_user(

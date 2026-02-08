@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, status, HTTPException
+from fastapi import APIRouter, Depends, status, HTTPException, Query
 from typing import List, Annotated
 from sqlalchemy.ext.asyncio import AsyncSession
 from urllib.parse import unquote
@@ -6,21 +6,28 @@ from urllib.parse import unquote
 from ...database.schemas.user import User
 from ...database.schemas.bus import Bus, BusCreate, BusUpdate
 from ...database.schemas.route import OptimizedRouteResponse
+from ...database.schemas.common import PaginatedResponse
 from ...dependencies import get_db, get_current_admin_user
 from ...services.bus_service import BusService
 from ...services.route_service import RouteService
 
 router = APIRouter(tags=["admin-buses"])
 
-@router.get("/buses", response_model=List[Bus])
+@router.get("/buses", response_model=PaginatedResponse[Bus])
 async def list_buses(
     current_user: Annotated[User, Depends(get_current_admin_user)],
     db: AsyncSession = Depends(get_db),
-    skip: int = 0,
-    limit: int = 100
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=100)
 ):
+    """List buses with tenant filtering and pagination."""
     service = BusService(db)
-    return await service.get_buses(skip, limit)
+    buses, total = await service.get_buses(
+        skip=skip, 
+        limit=limit, 
+        current_user_org_id=current_user.organization_id
+    )
+    return PaginatedResponse(items=buses, total=total, skip=skip, limit=limit)
 
 @router.post("/buses", response_model=Bus, status_code=status.HTTP_201_CREATED)
 async def create_bus(
@@ -78,5 +85,5 @@ async def get_bus_route(
     except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to calculate route: {str(e)}"
+            detail="Failed to calculate route. Please try again later."
         )
