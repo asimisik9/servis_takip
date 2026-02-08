@@ -5,7 +5,7 @@ from fastapi import HTTPException, status
 from uuid import uuid4
 from typing import List, Optional, Tuple
 
-from ..database.models.user import User as UserModel
+from ..database.models.user import User as UserModel, UserRole
 from ..database.models.bus import Bus as BusModel
 from ..database.models.school import School as SchoolModel
 from ..database.schemas.user import UserCreate, UserUpdate
@@ -66,6 +66,13 @@ class UserService:
         # If created by super admin -> can specify org_id in request
         org_id = current_user_org_id if current_user_org_id else user.organization_id
 
+        # Tenant admins cannot create super_admin accounts.
+        if current_user_org_id is not None and user.role.value == UserRole.super_admin.value:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Tenant admins cannot create super_admin users"
+            )
+
         new_user = UserModel(
             id=str(uuid4()),
             full_name=user.full_name,
@@ -106,6 +113,12 @@ class UserService:
         if user_update.phone_number is not None:
             db_user.phone_number = user_update.phone_number
         if user_update.role is not None:
+            # Tenant admins cannot promote users to super_admin.
+            if current_user_org_id is not None and user_update.role.value == UserRole.super_admin.value:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Tenant admins cannot assign super_admin role"
+                )
             if db_user.role != user_update.role:
                 logger.warning(f"Role change: user={user_id} from={db_user.role.value} to={user_update.role}")
             db_user.role = user_update.role

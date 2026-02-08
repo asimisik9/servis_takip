@@ -185,7 +185,19 @@ class BusService:
         await self.db.delete(db_bus)
         await self.db.commit()
 
-    async def get_bus_locations(self) -> List[BusLocation]:
-        query = select(BusLocation).distinct(BusLocation.bus_id).order_by(BusLocation.bus_id, BusLocation.timestamp.desc())
+    async def get_bus_locations(
+        self,
+        current_user_org_id: Optional[str] = None,
+        current_user_org_type: Optional[str] = None
+    ) -> List[BusLocation]:
+        query = select(BusLocation).join(BusModel, BusModel.id == BusLocation.bus_id)
+        if current_user_org_id:
+            if current_user_org_type == "school":
+                query = query.join(SchoolModel, SchoolModel.id == BusModel.school_id).where(
+                    SchoolModel.organization_id == current_user_org_id
+                )
+            else:
+                query = query.where(BusModel.organization_id == current_user_org_id)
+        query = query.distinct(BusLocation.bus_id).order_by(BusLocation.bus_id, BusLocation.timestamp.desc())
         result = await self.db.execute(query)
         return result.scalars().all()

@@ -10,29 +10,35 @@ import logging
 logger = logging.getLogger(__name__)
 
 async def create_admin_if_not_exists():
-    """Admin kullanıcısı yoksa oluşturur"""
+    """Initial super admin yoksa oluşturur, varsa rolünü doğrular."""
     async with AsyncSessionLocal() as db:
         try:
-            # Check if admin exists
+            # Check if initial super admin exists
             query = select(User).where(User.email == settings.FIRST_SUPERUSER)
             result = await db.execute(query)
             admin = result.scalar_one_or_none()
             
             if not admin:
-                # Create admin user
+                # Create initial super admin user
                 admin = User(
                     id=str(uuid4()),
                     full_name="System Administrator",
                     email=settings.FIRST_SUPERUSER,
                     phone_number="+905550000000",
                     password_hash=hash_password(settings.FIRST_SUPERUSER_PASSWORD),
-                    role=UserRole.admin,
+                    role=UserRole.super_admin,
                     created_at=datetime.now(timezone.utc)
                 )
                 db.add(admin)
                 await db.commit()
-                logger.info("Admin user created successfully.")
+                logger.info("Initial super admin created successfully.")
             else:
-                logger.info("Admin user already exists.")
+                # Auto-heal legacy installs where seed created plain admin.
+                if admin.role != UserRole.super_admin:
+                    admin.role = UserRole.super_admin
+                    await db.commit()
+                    logger.warning("Initial user role upgraded to super_admin.")
+                else:
+                    logger.info("Initial super admin already exists.")
         except Exception as e:
             logger.error(f"Error seeding admin user: {e}")

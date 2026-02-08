@@ -149,6 +149,7 @@ async def send_notification(
             title=body.title,
             message=body.message,
             student_id=body.student_id,
+            sender_user=current_user,
         )
         if notif:
             sent_count += 1
@@ -175,7 +176,7 @@ async def notify_student_parents(
     Örn: Öğrenci okula vardı, eve bırakıldı, ETA bildirimi.
     """
     # Only drivers and admins can send student notifications
-    if current_user.role.value not in ("sofor", "admin"):
+    if current_user.role.value not in ("sofor", "admin", "super_admin"):
         raise HTTPException(
             status_code=403,
             detail="Only drivers and admins can send student notifications"
@@ -185,6 +186,7 @@ async def notify_student_parents(
     notifications = await service.notify_parents_of_student(
         student_id=student_id,
         notification_type=NotificationTypeModel(notification_type.value),
+        sender_user=current_user,
         eta_minutes=eta_minutes,
     )
     return NotificationResponse(

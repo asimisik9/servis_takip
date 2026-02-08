@@ -1,5 +1,5 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, or_
 from fastapi import status, WebSocket
 from jose import jwt, JWTError
 
@@ -43,9 +43,25 @@ class LocationService:
             return None
 
     async def validate_ws_access(self, user: models.User, bus_id: str) -> bool:
-        if user.role.value == "admin":
-            # Admins can monitor any bus
+        if user.role.value == "super_admin":
             return True
+
+        if user.role.value == "admin":
+            if not user.organization_id:
+                return False
+
+            # Admin can only monitor buses within their tenant scope.
+            stmt = select(models.Bus).join(
+                models.School, models.School.id == models.Bus.school_id
+            ).where(
+                models.Bus.id == bus_id,
+                or_(
+                    models.Bus.organization_id == user.organization_id,
+                    models.School.organization_id == user.organization_id,
+                ),
+            )
+            result = await self.db.execute(stmt)
+            return result.scalar_one_or_none() is not None
         
         elif user.role.value == "veli":
             # Veli sadece kendi çocuğunun servisini izleyebilir

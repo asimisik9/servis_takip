@@ -70,23 +70,48 @@ class SchoolService:
         result = await self.db.execute(query)
         return result.scalars().all(), total
 
-    async def get_school_by_id(self, school_id: str) -> Optional[SchoolModel]:
+    async def get_school_by_id(
+        self,
+        school_id: str,
+        current_user_org_id: Optional[str] = None
+    ) -> Optional[SchoolModel]:
         query = select(SchoolModel).options(
             selectinload(SchoolModel.contact_person)
         ).where(SchoolModel.id == school_id)
+        if current_user_org_id is not None:
+            query = query.where(SchoolModel.organization_id == current_user_org_id)
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
 
-    async def create_school(self, school: SchoolCreate) -> SchoolModel:
+    async def create_school(
+        self,
+        school: SchoolCreate,
+        current_user_org_id: Optional[str] = None
+    ) -> SchoolModel:
         query = select(SchoolModel).where(SchoolModel.school_name == school.school_name)
         if (await self.db.execute(query)).scalar_one_or_none():
             raise HTTPException(status_code=400, detail="School name already exists")
 
+        organization_id = current_user_org_id
+
         # Validate contact person exists
+        contact_person = None
         if school.contact_person_id:
             query = select(UserModel).where(UserModel.id == school.contact_person_id)
-            if not (await self.db.execute(query)).scalar_one_or_none():
-                raise HTTPException(status_code=400, detail="Contact person not found")
+            if current_user_org_id:
+                query = query.where(UserModel.organization_id == current_user_org_id)
+            contact_person = (await self.db.execute(query)).scalar_one_or_none()
+            if not contact_person:
+                raise HTTPException(status_code=400, detail="Contact person not found or access denied")
+
+        # Super admin flow: infer organization from contact person.
+        if organization_id is None:
+            organization_id = contact_person.organization_id if contact_person else None
+            if organization_id is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="School organization could not be inferred. Provide a contact person in target organization."
+                )
 
         # Geocode the school address
         lat, lng = await self._geocode_address(school.school_address)
@@ -96,6 +121,7 @@ class SchoolService:
             school_name=school.school_name,
             school_address=school.school_address,
             contact_person_id=school.contact_person_id,
+            organization_id=organization_id,
             latitude=lat,
             longitude=lng
         )
@@ -104,8 +130,13 @@ class SchoolService:
         await self.db.refresh(new_school)
         return new_school
 
-    async def update_school(self, school_id: str, school_update: SchoolUpdate) -> SchoolModel:
-        db_school = await self.get_school_by_id(school_id)
+    async def update_school(
+        self,
+        school_id: str,
+        school_update: SchoolUpdate,
+        current_user_org_id: Optional[str] = None
+    ) -> SchoolModel:
+        db_school = await self.get_school_by_id(school_id, current_user_org_id=current_user_org_id)
         if not db_school:
             raise HTTPException(status_code=404, detail="School not found")
 
@@ -116,8 +147,10 @@ class SchoolService:
 
         if school_update.contact_person_id:
             query = select(UserModel).where(UserModel.id == school_update.contact_person_id)
+            if current_user_org_id:
+                query = query.where(UserModel.organization_id == current_user_org_id)
             if not (await self.db.execute(query)).scalar_one_or_none():
-                raise HTTPException(status_code=400, detail="Contact person not found")
+                raise HTTPException(status_code=400, detail="Contact person not found or access denied")
 
         if school_update.school_name is not None:
             db_school.school_name = school_update.school_name
@@ -137,8 +170,8 @@ class SchoolService:
         await self.db.refresh(db_school)
         return db_school
 
-    async def delete_school(self, school_id: str):
-        db_school = await self.get_school_by_id(school_id)
+    async def delete_school(self, school_id: str, current_user_org_id: Optional[str] = None):
+        db_school = await self.get_school_by_id(school_id, current_user_org_id=current_user_org_id)
         if not db_school:
             raise HTTPException(status_code=404, detail="School not found")
 
@@ -163,11 +196,13 @@ class SchoolService:
         await self.db.delete(db_school)
         await self.db.commit()
 
-    async def geocode_existing_schools(self) -> dict:
+    async def geocode_existing_schools(self, current_user_org_id: Optional[str] = None) -> dict:
         """Geocode all schools that don't have coordinates yet"""
         query = select(SchoolModel).where(
             (SchoolModel.latitude.is_(None)) | (SchoolModel.longitude.is_(None))
         )
+        if current_user_org_id is not None:
+            query = query.where(SchoolModel.organization_id == current_user_org_id)
         result = await self.db.execute(query)
         schools = result.scalars().all()
         

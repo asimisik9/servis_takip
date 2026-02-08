@@ -34,7 +34,10 @@ async def create_school(
     db: AsyncSession = Depends(get_db)
 ):
     service = SchoolService(db)
-    return await service.create_school(school)
+    return await service.create_school(
+        school,
+        current_user_org_id=current_user.organization_id
+    )
 
 @router.get("/schools/{school_id}", response_model=School)
 async def get_school(
@@ -43,7 +46,10 @@ async def get_school(
     db: AsyncSession = Depends(get_db)
 ):
     service = SchoolService(db)
-    school = await service.get_school_by_id(unquote(school_id))
+    school = await service.get_school_by_id(
+        unquote(school_id),
+        current_user_org_id=current_user.organization_id
+    )
     if not school:
         raise HTTPException(status_code=404, detail="School not found")
     return school
@@ -56,7 +62,11 @@ async def update_school(
     db: AsyncSession = Depends(get_db)
 ):
     service = SchoolService(db)
-    return await service.update_school(unquote(school_id), school)
+    return await service.update_school(
+        unquote(school_id),
+        school,
+        current_user_org_id=current_user.organization_id
+    )
 
 @router.delete("/schools/{school_id}", status_code=status.HTTP_200_OK)
 async def delete_school(
@@ -65,7 +75,10 @@ async def delete_school(
     db: AsyncSession = Depends(get_db)
 ):
     service = SchoolService(db)
-    await service.delete_school(unquote(school_id))
+    await service.delete_school(
+        unquote(school_id),
+        current_user_org_id=current_user.organization_id
+    )
     return {"detail": "School deleted successfully"}
 
 
@@ -76,7 +89,9 @@ async def geocode_all_schools(
 ):
     """Geocode all schools that don't have coordinates yet"""
     service = SchoolService(db)
-    result = await service.geocode_existing_schools()
+    result = await service.geocode_existing_schools(
+        current_user_org_id=current_user.organization_id
+    )
     return {
         "detail": f"Geocoded {result['updated']} schools successfully",
         "updated": result["updated"],

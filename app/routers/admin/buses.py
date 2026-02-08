@@ -101,8 +101,21 @@ async def get_bus_route(
     Args:
         bus_id: Servisin UUID'si
     """
-    route_service = RouteService(db)
     bus_id = unquote(bus_id)
+    bus_service = BusService(db)
+    route_service = RouteService(db)
+
+    bus = await bus_service.get_bus_by_id(bus_id)
+    if not bus:
+        raise HTTPException(status_code=404, detail="Bus not found")
+
+    if current_user.organization_id:
+        org_type = current_user.organization.type.value if current_user.organization else None
+        if org_type == "school":
+            if not bus.school or bus.school.organization_id != current_user.organization_id:
+                raise HTTPException(status_code=404, detail="Bus not found")
+        elif bus.organization_id != current_user.organization_id:
+            raise HTTPException(status_code=404, detail="Bus not found")
     
     try:
         return await route_service.get_optimized_route(bus_id)

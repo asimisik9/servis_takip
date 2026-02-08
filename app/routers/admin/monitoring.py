@@ -7,6 +7,7 @@ from ...database.schemas.user import User
 from ...database.schemas.bus_location import BusLocation
 from ...database.schemas.attendance_log import AttendanceLog
 from ...dependencies import get_db, get_current_admin_user
+from ...database.schemas.common import PaginatedResponse
 from ...services.bus_service import BusService
 from ...services.attendance_service import AttendanceService
 
@@ -18,9 +19,13 @@ async def get_all_bus_locations(
     db: AsyncSession = Depends(get_db)
 ):
     service = BusService(db)
-    return await service.get_bus_locations()
+    org_type = current_user.organization.type.value if current_user.organization else None
+    return await service.get_bus_locations(
+        current_user_org_id=current_user.organization_id,
+        current_user_org_type=org_type
+    )
 
-@router.get("/logs/attendance", response_model=List[AttendanceLog])
+@router.get("/logs/attendance", response_model=PaginatedResponse[AttendanceLog])
 async def get_attendance_logs(
     current_user: Annotated[User, Depends(get_current_admin_user)],
     db: AsyncSession = Depends(get_db),
@@ -32,4 +37,13 @@ async def get_attendance_logs(
     limit: int = Query(default=100, ge=1, le=500)
 ):
     service = AttendanceService(db)
-    return await service.get_attendance_logs(start_date, end_date, bus_id, student_id, skip, limit)
+    logs, total = await service.get_attendance_logs(
+        start_date=start_date,
+        end_date=end_date,
+        bus_id=bus_id,
+        student_id=student_id,
+        skip=skip,
+        limit=limit,
+        current_user_org_id=current_user.organization_id
+    )
+    return PaginatedResponse(items=logs, total=total, skip=skip, limit=limit)

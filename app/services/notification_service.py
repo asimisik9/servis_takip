@@ -18,6 +18,7 @@ from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
+from fastapi import HTTPException
 
 from ..database.models.notification import (
     Notification as NotificationModel,
@@ -26,8 +27,12 @@ from ..database.models.notification import (
 )
 from ..database.models.user import User as UserModel
 from ..database.models.student import Student as StudentModel
+from ..database.models.school import School as SchoolModel
+from ..database.models.bus import Bus as BusModel
 from ..database.models.parent_student_relation import ParentStudentRelation
+from ..database.models.student_bus_assignment import StudentBusAssignment
 from ..core.config import settings
+from ..database.schemas.user import User as UserSchema
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +105,81 @@ class NotificationService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
+    async def _is_student_in_user_scope(self, sender_user: UserSchema, student_id: str) -> bool:
+        role = sender_user.role.value
+
+        if role == "super_admin":
+            return True
+
+        if role == "admin":
+            if not sender_user.organization_id:
+                return False
+
+            school_scope_query = (
+                select(StudentModel.id)
+                .join(SchoolModel, SchoolModel.id == StudentModel.school_id)
+                .where(
+                    StudentModel.id == student_id,
+                    SchoolModel.organization_id == sender_user.organization_id,
+                )
+            )
+            if (await self.db.execute(school_scope_query)).scalar_one_or_none():
+                return True
+
+            company_scope_query = (
+                select(StudentBusAssignment.id)
+                .join(BusModel, BusModel.id == StudentBusAssignment.bus_id)
+                .where(
+                    StudentBusAssignment.student_id == student_id,
+                    BusModel.organization_id == sender_user.organization_id,
+                )
+            )
+            return (await self.db.execute(company_scope_query)).scalar_one_or_none() is not None
+
+        if role == "sofor":
+            driver_scope_query = (
+                select(StudentBusAssignment.id)
+                .join(BusModel, BusModel.id == StudentBusAssignment.bus_id)
+                .where(
+                    StudentBusAssignment.student_id == student_id,
+                    BusModel.current_driver_id == sender_user.id,
+                )
+            )
+            return (await self.db.execute(driver_scope_query)).scalar_one_or_none() is not None
+
+        return False
+
+    async def _is_recipient_in_user_scope(
+        self,
+        sender_user: UserSchema,
+        recipient_id: str,
+        student_id: Optional[str] = None,
+    ) -> bool:
+        role = sender_user.role.value
+
+        if role == "super_admin":
+            return True
+
+        if role != "admin":
+            return False
+
+        recipient = await self.db.get(UserModel, recipient_id)
+        if not recipient:
+            return False
+
+        if sender_user.organization_id and recipient.organization_id == sender_user.organization_id:
+            return True
+
+        # Allow parent notifications for students inside sender scope even if parent tenant differs.
+        if student_id and await self._is_student_in_user_scope(sender_user, student_id):
+            relation_query = select(ParentStudentRelation.id).where(
+                ParentStudentRelation.parent_id == recipient_id,
+                ParentStudentRelation.student_id == student_id,
+            )
+            return (await self.db.execute(relation_query)).scalar_one_or_none() is not None
+
+        return False
+
     # ──────────────────────────── FCM Token ────────────────────────────
 
     async def register_fcm_token(self, user_id: str, fcm_token: str) -> bool:
@@ -137,8 +217,20 @@ class NotificationService:
         student_id: Optional[str] = None,
         student_name: str = "",
         eta_minutes: int = 0,
+        sender_user: Optional[UserSchema] = None,
     ) -> Optional[NotificationModel]:
         """Tek bir veliye push notification gönder ve DB'ye kaydet."""
+
+        recipient = await self.db.get(UserModel, recipient_id)
+        if not recipient:
+            raise HTTPException(status_code=404, detail="Recipient not found")
+
+        if sender_user:
+            if student_id and not await self._is_student_in_user_scope(sender_user, student_id):
+                raise HTTPException(status_code=403, detail="Student is out of your tenant scope")
+
+            if not await self._is_recipient_in_user_scope(sender_user, recipient_id, student_id=student_id):
+                raise HTTPException(status_code=403, detail="Recipient is out of your tenant scope")
 
         # Eğer title/message verilmediyse template'ten oluştur
         if not title or not message:
@@ -182,9 +274,13 @@ class NotificationService:
         self,
         student_id: str,
         notification_type: NotificationType,
+        sender_user: UserSchema,
         eta_minutes: int = 0,
     ) -> List[NotificationModel]:
         """Bir öğrencinin tüm velilerine bildirim gönder."""
+        if not await self._is_student_in_user_scope(sender_user, student_id):
+            raise HTTPException(status_code=403, detail="Student is out of your tenant scope")
+
         # Öğrenci bilgisini al
         student = await self.db.get(StudentModel, student_id)
         if not student:
@@ -206,6 +302,7 @@ class NotificationService:
                 student_id=student_id,
                 student_name=student.full_name,
                 eta_minutes=eta_minutes,
+                sender_user=sender_user,
             )
             if notif:
                 notifications.append(notif)

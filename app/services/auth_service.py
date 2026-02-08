@@ -160,6 +160,26 @@ class AuthService:
         is_blacklisted = await redis_manager.get(f"blacklist:{refresh_token}")
         if is_blacklisted:
             raise credentials_exception
+
+        # Fallback: Check DB blacklist if Redis missed (e.g. after Redis restart)
+        if not is_blacklisted:
+            try:
+                from ..database.models.token_blacklist import TokenBlacklist
+                stmt = select(TokenBlacklist).where(
+                    TokenBlacklist.token == refresh_token,
+                    TokenBlacklist.expires_at > datetime.now(timezone.utc)
+                )
+                result = await self.db.execute(stmt)
+                if result.scalar_one_or_none():
+                    try:
+                        await redis_manager.set(f"blacklist:{refresh_token}", "1", ex=3600)
+                    except Exception:
+                        pass
+                    raise credentials_exception
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.warning(f"Refresh DB blacklist check failed: {e}")
             
         try:
             payload = jwt.decode(refresh_token, REFRESH_SECRET_KEY, algorithms=[ALGORITHM])

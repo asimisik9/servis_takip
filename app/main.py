@@ -1,7 +1,7 @@
 # app/main.py
 
 from fastapi import FastAPI, Request, status, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from sqlalchemy.exc import IntegrityError, OperationalError
@@ -14,7 +14,6 @@ from .routers import auth, admin, driver, parent, location_ws, notification
 from .tasks import cleanup_old_bus_locations
 from jose import JWTError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
 from .middleware.audit import AuditMiddleware
 from .core.config import settings
 from .core.limiter import limiter
@@ -60,9 +59,12 @@ async def lifespan(app: FastAPI):
     Uygulama başladığında çalışan fonksiyon.
     Veritabanı bağlantısını ve tablo oluşturma işlemini test eder.
     """
-    logger.info("Veritabanı bağlantısı ve tablo oluşturma testi başlıyor...")
-    await create_tables() # Production'da Alembic kullanılmalı
-    logger.info("Veritabanı hazır. Tablolar başarıyla oluşturuldu/var.")
+    logger.info("Veritabanı bağlantısı ve startup kontrolleri başlıyor...")
+    if settings.ENVIRONMENT != "production":
+        await create_tables()  # Development convenience
+        logger.info("Veritabanı tabloları doğrulandı/oluşturuldu.")
+    else:
+        logger.info("Production ortamı: create_tables atlandı (Alembic migration bekleniyor).")
     
     # Redis bağlantısı
     await redis_manager.connect()
@@ -100,9 +102,18 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # Audit Middleware - KVKK/GDPR compliance (Inner - runs after CORS)
 app.add_middleware(AuditMiddleware)
 
-# HTTPS Redirect (Production only)
+# HTTPS Redirect (Production only) with health endpoint exceptions.
 if settings.ENVIRONMENT == "production":
-    app.add_middleware(HTTPSRedirectMiddleware)
+    @app.middleware("http")
+    async def enforce_https(request: Request, call_next):
+        if request.url.path in {"/health", "/readiness"}:
+            return await call_next(request)
+
+        if request.headers.get("x-forwarded-proto", "http") != "https":
+            secure_url = str(request.url.replace(scheme="https"))
+            return RedirectResponse(url=secure_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+
+        return await call_next(request)
 
 # CORS middleware - Production requires explicit origins
 if settings.BACKEND_CORS_ORIGINS:
