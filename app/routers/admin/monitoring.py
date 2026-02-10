@@ -37,6 +37,7 @@ async def get_attendance_logs(
     limit: int = Query(default=100, ge=1, le=500)
 ):
     service = AttendanceService(db)
+    org_type = current_user.organization.type.value if current_user.organization else None
     logs, total = await service.get_attendance_logs(
         start_date=start_date,
         end_date=end_date,
@@ -44,6 +45,7 @@ async def get_attendance_logs(
         student_id=student_id,
         skip=skip,
         limit=limit,
-        current_user_org_id=current_user.organization_id
+        current_user_org_id=current_user.organization_id,
+        current_user_org_type=org_type
     )
     return PaginatedResponse(items=logs, total=total, skip=skip, limit=limit)

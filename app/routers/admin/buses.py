@@ -40,7 +40,12 @@ async def create_bus(
     db: AsyncSession = Depends(get_db)
 ):
     service = BusService(db)
-    return await service.create_bus(bus, current_user_org_id=current_user.organization_id)
+    org_type = current_user.organization.type.value if current_user.organization else None
+    return await service.create_bus(
+        bus,
+        current_user_org_id=current_user.organization_id,
+        current_user_org_type=org_type
+    )
 
 @router.put("/buses/{bus_id}", response_model=Bus)
 async def update_bus(
@@ -50,10 +55,12 @@ async def update_bus(
     db: AsyncSession = Depends(get_db)
 ):
     service = BusService(db)
+    org_type = current_user.organization.type.value if current_user.organization else None
     return await service.update_bus(
         unquote(bus_id), 
         bus,
-        current_user_org_id=current_user.organization_id
+        current_user_org_id=current_user.organization_id,
+        current_user_org_type=org_type
     )
 
 @router.get("/buses/{bus_id}", response_model=Bus)
@@ -63,11 +70,13 @@ async def get_bus(
     db: AsyncSession = Depends(get_db)
 ):
     service = BusService(db)
-    bus = await service.get_bus_by_id(unquote(bus_id))
+    org_type = current_user.organization.type.value if current_user.organization else None
+    bus = await service.get_bus_by_id(
+        unquote(bus_id),
+        current_user_org_id=current_user.organization_id,
+        current_user_org_type=org_type
+    )
     if not bus:
-        raise HTTPException(status_code=404, detail="Bus not found")
-    # Tenant check
-    if current_user.organization_id and bus.organization_id != current_user.organization_id:
         raise HTTPException(status_code=404, detail="Bus not found")
     return bus
 
@@ -78,9 +87,11 @@ async def delete_bus(
     db: AsyncSession = Depends(get_db)
 ):
     service = BusService(db)
+    org_type = current_user.organization.type.value if current_user.organization else None
     await service.delete_bus(
         unquote(bus_id),
-        current_user_org_id=current_user.organization_id
+        current_user_org_id=current_user.organization_id,
+        current_user_org_type=org_type
     )
     return {"detail": "Bus deleted successfully"}
 
@@ -104,18 +115,15 @@ async def get_bus_route(
     bus_id = unquote(bus_id)
     bus_service = BusService(db)
     route_service = RouteService(db)
+    org_type = current_user.organization.type.value if current_user.organization else None
 
-    bus = await bus_service.get_bus_by_id(bus_id)
+    bus = await bus_service.get_bus_by_id(
+        bus_id,
+        current_user_org_id=current_user.organization_id,
+        current_user_org_type=org_type
+    )
     if not bus:
         raise HTTPException(status_code=404, detail="Bus not found")
-
-    if current_user.organization_id:
-        org_type = current_user.organization.type.value if current_user.organization else None
-        if org_type == "school":
-            if not bus.school or bus.school.organization_id != current_user.organization_id:
-                raise HTTPException(status_code=404, detail="Bus not found")
-        elif bus.organization_id != current_user.organization_id:
-            raise HTTPException(status_code=404, detail="Bus not found")
     
     try:
         return await route_service.get_optimized_route(bus_id)

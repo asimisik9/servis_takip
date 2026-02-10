@@ -113,6 +113,7 @@ class AuthService:
                 logger.error(f"Failed to blacklist token in Redis: {e}")
         
         # Secondary: DB persistence (survives Redis restart)
+        db_ok = False
         try:
             from ..database.models.token_blacklist import TokenBlacklist
             from ..database.database import AsyncSessionLocal
@@ -125,10 +126,17 @@ class AuthService:
                 )
                 db.add(blacklisted)
                 await db.commit()
+                db_ok = True
         except Exception as e:
             logger.error(f"Failed to persist blacklisted token to DB: {e}")
             if not redis_ok:
                 logger.critical("Token blacklist failed in BOTH Redis and DB! Token remains valid.")
+
+        if not redis_ok and not db_ok:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Token revocation failed"
+            )
 
     async def logout(self, token: str):
         try:
@@ -140,6 +148,8 @@ class AuthService:
             
             exp = payload.get("exp", 0)
             await self._blacklist_token(token, exp)
+        except HTTPException:
+            raise
         except JWTError:
             pass  # Token already expired or invalid — no need to blacklist
         except Exception as e:
@@ -157,29 +167,34 @@ class AuthService:
         )
         
         # Check blacklist in Redis
-        is_blacklisted = await redis_manager.get(f"blacklist:{refresh_token}")
+        try:
+            is_blacklisted = await redis_manager.get(f"blacklist:{refresh_token}")
+        except Exception as e:
+            logger.warning(f"Refresh Redis blacklist check failed: {e}")
+            is_blacklisted = None
         if is_blacklisted:
             raise credentials_exception
 
         # Fallback: Check DB blacklist if Redis missed (e.g. after Redis restart)
-        if not is_blacklisted:
-            try:
-                from ..database.models.token_blacklist import TokenBlacklist
-                stmt = select(TokenBlacklist).where(
-                    TokenBlacklist.token == refresh_token,
-                    TokenBlacklist.expires_at > datetime.now(timezone.utc)
-                )
-                result = await self.db.execute(stmt)
-                if result.scalar_one_or_none():
-                    try:
-                        await redis_manager.set(f"blacklist:{refresh_token}", "1", ex=3600)
-                    except Exception:
-                        pass
-                    raise credentials_exception
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.warning(f"Refresh DB blacklist check failed: {e}")
+        try:
+            from ..database.models.token_blacklist import TokenBlacklist
+            stmt = select(TokenBlacklist).where(
+                TokenBlacklist.token == refresh_token,
+                TokenBlacklist.expires_at > datetime.now(timezone.utc)
+            )
+            result = await self.db.execute(stmt)
+            if result.scalar_one_or_none():
+                try:
+                    await redis_manager.set(f"blacklist:{refresh_token}", "1", ex=3600)
+                except Exception:
+                    pass
+                raise credentials_exception
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Refresh DB blacklist check failed: {e}")
+            # Fail-closed: we cannot safely validate revocation state.
+            raise credentials_exception
             
         try:
             payload = jwt.decode(refresh_token, REFRESH_SECRET_KEY, algorithms=[ALGORITHM])

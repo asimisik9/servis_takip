@@ -109,10 +109,20 @@ class OrganizationService:
         # Check for existing contract
         existing = await self._get_contract_by_orgs(data.school_org_id, data.company_org_id)
         if existing:
-            raise HTTPException(
-                status_code=409,
-                detail="Contract already exists between these organizations"
-            )
+            if existing.is_active:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Contract already exists between these organizations"
+                )
+
+            # Re-activate historical contract because DB enforces unique school/company pair.
+            existing.is_active = True
+            existing.start_date = data.start_date
+            existing.end_date = data.end_date
+            await self.db.commit()
+            await self.db.refresh(existing)
+            logger.info(f"Re-activated contract: {school_org.name} <-> {company_org.name}")
+            return existing
         
         contract = ContractModel(
             id=str(uuid4()),

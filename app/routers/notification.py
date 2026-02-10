@@ -141,8 +141,14 @@ async def send_notification(
     Admin veya sistem tarafından kullanılır.
     """
     service = NotificationService(db)
+    recipient_ids = await service.prevalidate_bulk_notification_targets(
+        sender_user=current_user,
+        recipient_ids=body.recipient_ids,
+        student_id=body.student_id,
+    )
+
     sent_count = 0
-    for recipient_id in body.recipient_ids:
+    for recipient_id in recipient_ids:
         notif = await service.send_notification(
             recipient_id=recipient_id,
             notification_type=NotificationTypeModel(body.notification_type.value),
@@ -156,7 +162,7 @@ async def send_notification(
 
     return NotificationResponse(
         success=True,
-        message=f"{sent_count}/{len(body.recipient_ids)} bildirim gönderildi",
+        message=f"{sent_count}/{len(recipient_ids)} bildirim gönderildi",
     )
 
 

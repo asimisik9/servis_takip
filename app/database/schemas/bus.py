@@ -11,7 +11,7 @@ class BusBase(BaseModel):
 
 class BusCreate(BusBase):
     """Schema for creating a new Bus"""
-    pass
+    organization_id: Optional[str] = None
 
 class BusUpdate(BaseModel):
     """Schema for updating a Bus"""
@@ -19,10 +19,12 @@ class BusUpdate(BaseModel):
     capacity: Optional[int] = Field(None, gt=0)  # positive integer validation
     school_id: Optional[str] = None
     current_driver_id: Optional[str] = None
+    organization_id: Optional[str] = None
 
 class Bus(BusBase):
     """Schema for Bus responses"""
     id: str
+    organization_id: Optional[str] = None
     current_driver: Optional["UserBase"] = None
     school_name: Optional[str] = None
     driver_name: Optional[str] = None

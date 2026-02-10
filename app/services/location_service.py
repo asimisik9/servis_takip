@@ -2,6 +2,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_
 from fastapi import status, WebSocket
 from jose import jwt, JWTError
+from datetime import datetime, timezone
 
 from ..database import models
 from ..core.security import SECRET_KEY, ALGORITHM
@@ -25,10 +26,29 @@ class LocationService:
             # Check Redis blacklist
             try:
                 is_blacklisted = await redis_manager.get(f"blacklist:{token}")
-                if is_blacklisted:
+            except Exception:
+                is_blacklisted = None
+            if is_blacklisted:
+                return None
+
+            # Secondary check in DB for Redis misses/restarts.
+            try:
+                from ..database.models.token_blacklist import TokenBlacklist
+
+                stmt = select(TokenBlacklist).where(
+                    TokenBlacklist.token == token,
+                    TokenBlacklist.expires_at > datetime.now(timezone.utc)
+                )
+                result = await self.db.execute(stmt)
+                if result.scalar_one_or_none():
+                    try:
+                        await redis_manager.set(f"blacklist:{token}", "1", ex=3600)
+                    except Exception:
+                        pass
                     return None
             except Exception:
-                pass  # If Redis is down, allow through (DB check is too heavy for WS)
+                # Fail-closed if revocation state cannot be validated.
+                return None
             
             query = select(models.User).where(models.User.email == email)
             result = await self.db.execute(query)

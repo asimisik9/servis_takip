@@ -41,31 +41,36 @@ async def get_current_user(
     )
     
     # Check if token is blacklisted (Redis — O(1) lookup)
-    is_blacklisted = await redis_manager.get(f"blacklist:{token}")
+    try:
+        is_blacklisted = await redis_manager.get(f"blacklist:{token}")
+    except Exception as e:
+        logger.warning(f"Redis blacklist check failed: {e}")
+        is_blacklisted = None
     if is_blacklisted:
         raise credentials_exception
     
     # Fallback: Check DB blacklist if Redis missed (e.g. after Redis restart)
-    if not is_blacklisted:
-        try:
-            from .database.models.token_blacklist import TokenBlacklist
-            from datetime import datetime, timezone
-            stmt = select(TokenBlacklist).where(
-                TokenBlacklist.token == token,
-                TokenBlacklist.expires_at > datetime.now(timezone.utc)
-            )
-            result = await db.execute(stmt)
-            if result.scalar_one_or_none():
-                # Re-populate Redis so subsequent checks are fast
-                try:
-                    await redis_manager.set(f"blacklist:{token}", "1", ex=3600)
-                except Exception:
-                    pass
-                raise credentials_exception
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.warning(f"DB blacklist check failed: {e}")
+    try:
+        from .database.models.token_blacklist import TokenBlacklist
+        from datetime import datetime, timezone
+        stmt = select(TokenBlacklist).where(
+            TokenBlacklist.token == token,
+            TokenBlacklist.expires_at > datetime.now(timezone.utc)
+        )
+        result = await db.execute(stmt)
+        if result.scalar_one_or_none():
+            # Re-populate Redis so subsequent checks are fast
+            try:
+                await redis_manager.set(f"blacklist:{token}", "1", ex=3600)
+            except Exception:
+                pass
+            raise credentials_exception
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"DB blacklist check failed: {e}")
+        # Fail-closed: token revocation state could not be verified safely.
+        raise credentials_exception
 
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
@@ -107,6 +112,13 @@ class RoleChecker:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Operation not permitted"
             )
+        # Defense-in-depth: tenant admin must always be bound to an organization.
+        # Prevents platform-wide access when a plain admin account has organization_id=NULL.
+        if "admin" in self.allowed_roles and user.role.value == "admin" and user.organization_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Admin account is not bound to an organization"
+            )
         return user
 
 # Role dependencies
@@ -117,4 +129,3 @@ get_current_super_admin = RoleChecker(["super_admin"])
 # Driver ve parent - mobil uygulama kullanıcıları
 get_current_driver_user = RoleChecker(["sofor"])
 get_current_parent_user = RoleChecker(["veli"])
-

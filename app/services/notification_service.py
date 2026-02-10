@@ -180,6 +180,42 @@ class NotificationService:
 
         return False
 
+    async def prevalidate_bulk_notification_targets(
+        self,
+        sender_user: UserSchema,
+        recipient_ids: List[str],
+        student_id: Optional[str] = None,
+    ) -> List[str]:
+        """Validate all recipients before sending to avoid partial success on scope errors."""
+        unique_recipient_ids = list(dict.fromkeys(recipient_ids))
+
+        if student_id and not await self._is_student_in_user_scope(sender_user, student_id):
+            raise HTTPException(status_code=403, detail="Student is out of your tenant scope")
+
+        missing_recipients: List[str] = []
+        out_of_scope_recipients: List[str] = []
+
+        for recipient_id in unique_recipient_ids:
+            recipient = await self.db.get(UserModel, recipient_id)
+            if not recipient:
+                missing_recipients.append(recipient_id)
+                continue
+            if not await self._is_recipient_in_user_scope(sender_user, recipient_id, student_id=student_id):
+                out_of_scope_recipients.append(recipient_id)
+
+        if missing_recipients:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Some recipients were not found: {', '.join(missing_recipients)}",
+            )
+        if out_of_scope_recipients:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Some recipients are out of your tenant scope: {', '.join(out_of_scope_recipients)}",
+            )
+
+        return unique_recipient_ids
+
     # ──────────────────────────── FCM Token ────────────────────────────
 
     async def register_fcm_token(self, user_id: str, fcm_token: str) -> bool:

@@ -5,6 +5,7 @@ Optimizes the order of student pickups for a bus route
 """
 
 import asyncio
+import hashlib
 import logging
 from typing import List, Dict, Optional, Tuple, Set
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -64,14 +65,31 @@ class RouteService:
         Returns:
             OptimizedRouteResponse with optimized stops and total distance/duration
         """
+        # Include visited/ignored student state in cache key to avoid stale route responses.
+        combined_excludes: Set[str] = set()
+        if not include_all:
+            server_visited = await self._progress.get_visited(bus_id)
+            combined_excludes.update(server_visited)
+            if exclude_student_ids:
+                combined_excludes.update(exclude_student_ids)
+
+        if include_all:
+            exclude_fingerprint = "all"
+        elif not combined_excludes:
+            exclude_fingerprint = "none"
+        else:
+            exclude_fingerprint = hashlib.sha1(
+                ",".join(sorted(combined_excludes)).encode("utf-8")
+            ).hexdigest()[:12]
+
         # Check cache first
-        # Compose cache key based on origin and trip_type to avoid stale routes
+        # Compose cache key based on origin, trip_type and filtered student set.
         if origin is not None:
             o_lat = round(origin[0], 4)
             o_lng = round(origin[1], 4)
-            cache_key = f"route:{bus_id}:{o_lat}:{o_lng}:{trip_type}:{'all' if include_all else 'filtered'}"
+            cache_key = f"route:{bus_id}:{o_lat}:{o_lng}:{trip_type}:{exclude_fingerprint}"
         else:
-            cache_key = f"route:{bus_id}:no_origin:{trip_type}:{'all' if include_all else 'filtered'}"
+            cache_key = f"route:{bus_id}:no_origin:{trip_type}:{exclude_fingerprint}"
         cached_route = await redis_manager.get(cache_key)
         if cached_route:
             logger.info(f"Route cache hit for bus {bus_id}")
@@ -88,10 +106,6 @@ class RouteService:
 
         # Exclude visited or ignored students unless include_all=true
         if not include_all:
-            server_visited = await self._progress.get_visited(bus_id)
-            combined_excludes: Set[str] = set(server_visited)
-            if exclude_student_ids:
-                combined_excludes.update(exclude_student_ids)
             if combined_excludes:
                 before = len(stops)
                 stops = [s for s in stops if s.student_id not in combined_excludes]
@@ -496,4 +510,3 @@ class RouteService:
             logger.info("All route caches invalidated")
         except Exception as e:
             logger.error(f"Failed to invalidate all route caches: {str(e)}")
-

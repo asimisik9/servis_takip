@@ -10,7 +10,6 @@ router.include_router(organizations.router)
 router.include_router(users.router)
 router.include_router(students.router)
 router.include_router(schools.router)
+router.include_router(monitoring.router)
 router.include_router(buses.router)
 router.include_router(assignments.router)
-router.include_router(monitoring.router)
-

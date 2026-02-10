@@ -9,6 +9,7 @@ import logging
 
 from ..core.config import settings
 from ..database.models.school import School as SchoolModel
+from ..database.models.organization import Organization as OrganizationModel, OrganizationType
 from ..database.models.user import User as UserModel
 from ..database.models.student import Student as StudentModel
 from ..database.models.bus import Bus as BusModel
@@ -19,6 +20,21 @@ logger = logging.getLogger(__name__)
 class SchoolService:
     def __init__(self, db: AsyncSession):
         self.db = db
+
+    async def _validate_school_organization(self, organization_id: str) -> OrganizationModel:
+        """School records must always be attached to a school-type organization."""
+        query = select(OrganizationModel).where(OrganizationModel.id == organization_id)
+        organization = (await self.db.execute(query)).scalar_one_or_none()
+        if not organization:
+            raise HTTPException(status_code=400, detail="Organization not found")
+        if organization.type != OrganizationType.school:
+            raise HTTPException(
+                status_code=400,
+                detail="School organization must be of type 'school'"
+            )
+        if not organization.is_active:
+            raise HTTPException(status_code=400, detail="Organization is inactive")
+        return organization
 
     async def _geocode_address(self, address: str) -> tuple[Optional[float], Optional[float]]:
         """Convert address to latitude and longitude using Google Maps Geocoding API (async)"""
@@ -92,8 +108,6 @@ class SchoolService:
         if (await self.db.execute(query)).scalar_one_or_none():
             raise HTTPException(status_code=400, detail="School name already exists")
 
-        organization_id = current_user_org_id
-
         # Validate contact person exists
         contact_person = None
         if school.contact_person_id:
@@ -104,6 +118,8 @@ class SchoolService:
             if not contact_person:
                 raise HTTPException(status_code=400, detail="Contact person not found or access denied")
 
+        organization_id = current_user_org_id
+
         # Super admin flow: infer organization from contact person.
         if organization_id is None:
             organization_id = contact_person.organization_id if contact_person else None
@@ -112,6 +128,14 @@ class SchoolService:
                     status_code=400,
                     detail="School organization could not be inferred. Provide a contact person in target organization."
                 )
+
+        await self._validate_school_organization(organization_id)
+
+        if contact_person and contact_person.organization_id != organization_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Contact person must belong to the school's organization"
+            )
 
         # Geocode the school address
         lat, lng = await self._geocode_address(school.school_address)
@@ -146,9 +170,10 @@ class SchoolService:
                 raise HTTPException(status_code=400, detail="School name already exists")
 
         if school_update.contact_person_id:
-            query = select(UserModel).where(UserModel.id == school_update.contact_person_id)
-            if current_user_org_id:
-                query = query.where(UserModel.organization_id == current_user_org_id)
+            query = select(UserModel).where(
+                UserModel.id == school_update.contact_person_id,
+                UserModel.organization_id == db_school.organization_id
+            )
             if not (await self.db.execute(query)).scalar_one_or_none():
                 raise HTTPException(status_code=400, detail="Contact person not found or access denied")
 

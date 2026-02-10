@@ -1,7 +1,7 @@
 from sqlalchemy import select
 from .models.user import User, UserRole
 from .database import AsyncSessionLocal
-from ..core.security import hash_password
+from ..core.security import hash_password, verify_password
 from ..core.config import settings
 from uuid import uuid4
 from datetime import datetime, timezone
@@ -33,11 +33,18 @@ async def create_admin_if_not_exists():
                 await db.commit()
                 logger.info("Initial super admin created successfully.")
             else:
-                # Auto-heal legacy installs where seed created plain admin.
                 if admin.role != UserRole.super_admin:
-                    admin.role = UserRole.super_admin
-                    await db.commit()
-                    logger.warning("Initial user role upgraded to super_admin.")
+                    # Guardrail: do not auto-elevate arbitrary account with matching email.
+                    # Only repair legacy seed user if configured bootstrap password still matches.
+                    if verify_password(settings.FIRST_SUPERUSER_PASSWORD, admin.password_hash):
+                        admin.role = UserRole.super_admin
+                        await db.commit()
+                        logger.warning("Initial user role upgraded to super_admin after credential verification.")
+                    else:
+                        logger.critical(
+                            "FIRST_SUPERUSER exists but is not super_admin and credentials do not match bootstrap config. "
+                            "Automatic role upgrade refused."
+                        )
                 else:
                     logger.info("Initial super admin already exists.")
         except Exception as e:

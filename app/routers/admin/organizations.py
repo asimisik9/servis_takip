@@ -6,7 +6,6 @@ from datetime import date
 
 from ...dependencies import get_db, get_current_admin_user, get_current_super_admin
 from ...database.schemas.user import User
-from ...database.models.user import UserRole
 from ...database.schemas.organization import (
     OrganizationType,
     Organization,
@@ -52,56 +51,13 @@ async def list_organizations(
     Organizasyonları listele.
     Super-admin tümünü görür, tenant-admin sadece kendisini görür.
     """
-    # Tenant admin can only see their own organization
-    if current_user.organization_id is not None:
+    if current_user.role.value != "super_admin":
+        if current_user.organization_id is None:
+            raise HTTPException(status_code=403, detail="Admin account is not bound to an organization")
         org = await service.get_organization(current_user.organization_id)
         return PaginatedResponse(items=[org], total=1, skip=0, limit=limit)
     organizations, total = await service.get_organizations(org_type=org_type, skip=skip, limit=limit)
     return PaginatedResponse(items=organizations, total=total, skip=skip, limit=limit)
-
-
-@router.get("/{org_id}", response_model=Organization)
-async def get_organization(
-    org_id: str,
-    current_user: User = Depends(get_current_admin_user),
-    service: OrganizationService = Depends(get_organization_service)
-):
-    """Organization detayını getir."""
-    org = await service.get_organization(org_id)
-    
-    # Tenant admin can only view their own organization
-    if current_user.organization_id is not None and current_user.organization_id != org_id:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=403, detail="Access denied")
-    
-    return org
-
-
-@router.put("/{org_id}", response_model=Organization)
-async def update_organization(
-    org_id: str,
-    data: OrganizationUpdate,
-    current_user: User = Depends(get_current_admin_user),
-    service: OrganizationService = Depends(get_organization_service)
-):
-    """Organization güncelle."""
-    # Tenant admin can only update their own organization
-    if current_user.organization_id is not None and current_user.organization_id != org_id:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=403, detail="Access denied")
-    
-    return await service.update_organization(org_id, data)
-
-
-@router.delete("/{org_id}")
-async def delete_organization(
-    org_id: str,
-    current_user: User = Depends(get_current_super_admin),
-    service: OrganizationService = Depends(get_organization_service)
-):
-    """Organization sil (soft delete). Sadece super_admin."""
-    await service.delete_organization(org_id)
-    return {"message": "Organization deleted successfully"}
 
 
 # ===== Contract Endpoints =====
@@ -133,8 +89,9 @@ async def list_contracts(
     Sözleşmeleri listele.
     Tenant-admin sadece kendi organizasyonuyla ilgili sözleşmeleri görür.
     """
-    # If tenant admin, filter by their organization
-    if current_user.organization_id is not None:
+    if current_user.role.value != "super_admin":
+        if current_user.organization_id is None:
+            raise HTTPException(status_code=403, detail="Admin account is not bound to an organization")
         # Determine if user's org is school or company
         user_org = await service.get_organization(current_user.organization_id)
         from ...database.models.organization import OrganizationType as OrgTypeModel
@@ -162,3 +119,40 @@ async def terminate_contract(
     await service.terminate_contract(contract_id)
     return {"message": "Contract terminated successfully"}
 
+
+@router.get("/{org_id}", response_model=Organization)
+async def get_organization(
+    org_id: str,
+    current_user: User = Depends(get_current_admin_user),
+    service: OrganizationService = Depends(get_organization_service)
+):
+    """Organization detayını getir."""
+    if current_user.role.value != "super_admin":
+        if current_user.organization_id is None or current_user.organization_id != org_id:
+            raise HTTPException(status_code=403, detail="Access denied")
+    return await service.get_organization(org_id)
+
+
+@router.put("/{org_id}", response_model=Organization)
+async def update_organization(
+    org_id: str,
+    data: OrganizationUpdate,
+    current_user: User = Depends(get_current_admin_user),
+    service: OrganizationService = Depends(get_organization_service)
+):
+    """Organization güncelle."""
+    if current_user.role.value != "super_admin":
+        if current_user.organization_id is None or current_user.organization_id != org_id:
+            raise HTTPException(status_code=403, detail="Access denied")
+    return await service.update_organization(org_id, data)
+
+
+@router.delete("/{org_id}")
+async def delete_organization(
+    org_id: str,
+    current_user: User = Depends(get_current_super_admin),
+    service: OrganizationService = Depends(get_organization_service)
+):
+    """Organization sil (soft delete). Sadece super_admin."""
+    await service.delete_organization(org_id)
+    return {"message": "Organization deleted successfully"}

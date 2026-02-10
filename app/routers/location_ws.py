@@ -48,10 +48,19 @@ def _validate_location_data(data: dict) -> bool:
     except (TypeError, ValueError):
         return False
 
+
+def _extract_ws_token(websocket: WebSocket, query_token: str | None) -> str | None:
+    """Prefer Authorization header token, keep query token as backward-compatible fallback."""
+    auth_header = websocket.headers.get("authorization")
+    if auth_header and auth_header.lower().startswith("bearer "):
+        return auth_header.split(" ", 1)[1].strip()
+    return query_token
+
+
 @router.websocket("/ws/driver/location")
 async def driver_location_ws(
     websocket: WebSocket,
-    token: str = Query(...)
+    token: str | None = Query(default=None)
 ):
     """
     Şoförler için basitleştirilmiş WebSocket endpoint'i.
@@ -64,6 +73,11 @@ async def driver_location_ws(
     logger.info("WS Connection accepted. Verifying token...")
     
     try:
+        token = _extract_ws_token(websocket, token)
+        if not token:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+
         async with AsyncSessionLocal() as db:
             service = LocationService(db)
             user = await service.get_user_from_token(token)
@@ -90,9 +104,6 @@ async def driver_location_ws(
         redis = await redis_manager.get_redis()
         channel_name = f"bus:{bus_id}:location"
         
-        # Track background tasks to prevent GC and handle exceptions
-        _background_tasks: set[asyncio.Task] = set()
-        
         try:
             while True:
                 data = await websocket.receive_text()
@@ -108,10 +119,8 @@ async def driver_location_ws(
                     # Redis kanalına yayınla
                     await redis.publish(channel_name, json.dumps(json_data))
                     
-                    # Veritabanına kaydet (arka planda, referansı tutarak)
-                    task = asyncio.create_task(save_location_to_db(bus_id, json_data))
-                    _background_tasks.add(task)
-                    task.add_done_callback(_background_tasks.discard)
+                    # Apply backpressure: wait for DB persist before accepting next message.
+                    await save_location_to_db(bus_id, json_data)
                     
                 except json.JSONDecodeError:
                     logger.error(f"Invalid JSON received from driver {user.id}")
@@ -132,7 +141,7 @@ async def driver_location_ws(
 async def bus_location_ws(
     websocket: WebSocket, 
     bus_id: str,
-    token: str = Query(...)
+    token: str | None = Query(default=None)
 ):
     """
     Otobüs konumu için WebSocket bağlantısı.
@@ -142,6 +151,11 @@ async def bus_location_ws(
     await websocket.accept()
     
     try:
+        token = _extract_ws_token(websocket, token)
+        if not token:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+
         async with AsyncSessionLocal() as db:
             service = LocationService(db)
             
@@ -200,8 +214,6 @@ async def bus_location_ws(
 
         # Redis dinleyicisini arka plan görevi olarak başlat
         redis_reader_task = asyncio.create_task(forward_redis_to_ws())
-        _background_tasks: set[asyncio.Task] = set()
-
         try:
             while True:
                 # WebSocket'ten mesaj bekle (Genellikle şoförden gelir)
@@ -220,10 +232,8 @@ async def bus_location_ws(
                         # Redis kanalına yayınla
                         await redis.publish(channel_name, json.dumps(json_data))
                         
-                        # Veritabanına da kaydet
-                        task = asyncio.create_task(save_location_to_db(bus_id, json_data))
-                        _background_tasks.add(task)
-                        task.add_done_callback(_background_tasks.discard)
+                        # Apply backpressure: wait for DB persist before accepting next message.
+                        await save_location_to_db(bus_id, json_data)
                         
                     except json.JSONDecodeError:
                         pass

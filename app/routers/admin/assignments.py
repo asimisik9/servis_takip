@@ -21,10 +21,12 @@ async def assign_parent_to_student(
     db: AsyncSession = Depends(get_db)
 ):
     service = AssignmentService(db)
+    org_type = current_user.organization.type.value if current_user.organization else None
     return await service.assign_parent_to_student(
         unquote(student_id), 
         parent_id,
-        current_user_org_id=current_user.organization_id
+        current_user_org_id=current_user.organization_id,
+        current_user_org_type=org_type
     )
 
 @router.post("/students/{student_id}/assign-bus", response_model=StudentBusAssignment)
@@ -35,10 +37,12 @@ async def assign_bus_to_student(
     db: AsyncSession = Depends(get_db)
 ):
     service = AssignmentService(db)
+    org_type = current_user.organization.type.value if current_user.organization else None
     return await service.assign_bus_to_student(
         unquote(student_id), 
         bus_id,
-        current_user_org_id=current_user.organization_id
+        current_user_org_id=current_user.organization_id,
+        current_user_org_type=org_type
     )
 
 @router.post("/buses/{bus_id}/assign-driver", response_model=Bus)
@@ -49,10 +53,12 @@ async def assign_driver_to_bus(
     db: AsyncSession = Depends(get_db)
 ):
     service = AssignmentService(db)
+    org_type = current_user.organization.type.value if current_user.organization else None
     return await service.assign_driver_to_bus(
         unquote(bus_id), 
         driver_id,
-        current_user_org_id=current_user.organization_id
+        current_user_org_id=current_user.organization_id,
+        current_user_org_type=org_type
     )
 
 @router.get("/assignments/student-bus", response_model=PaginatedResponse[StudentBusAssignment])
@@ -96,9 +102,11 @@ async def delete_student_bus_assignment(
     db: AsyncSession = Depends(get_db)
 ):
     service = AssignmentService(db)
+    org_type = current_user.organization.type.value if current_user.organization else None
     await service.delete_student_bus_assignment(
         unquote(assignment_id),
-        current_user_org_id=current_user.organization_id
+        current_user_org_id=current_user.organization_id,
+        current_user_org_type=org_type
     )
     return {"detail": "Assignment deleted successfully"}
 
@@ -109,8 +117,10 @@ async def delete_parent_student_relation(
     db: AsyncSession = Depends(get_db)
 ):
     service = AssignmentService(db)
+    org_type = current_user.organization.type.value if current_user.organization else None
     await service.delete_parent_student_relation(
         unquote(relation_id),
-        current_user_org_id=current_user.organization_id
+        current_user_org_id=current_user.organization_id,
+        current_user_org_type=org_type
     )
     return {"detail": "Relation deleted successfully"}

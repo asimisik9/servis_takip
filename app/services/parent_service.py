@@ -193,13 +193,20 @@ class ParentService:
         origin_lng = float(bus_location.longitude)
         
         # Destination depends on trip type
-        if student.latitude is None or student.longitude is None:
-            logger.warning(f"Student {student.id} has no coordinates for ETA calculation")
-            return None
-        
-        dest_lat = float(student.latitude)
-        dest_lng = float(student.longitude)
-        logger.info(f"ETA ({trip_status}): bus ({origin_lat}, {origin_lng}) -> student home ({dest_lat}, {dest_lng})")
+        if trip_status == "to_school":
+            if not student.school or student.school.latitude is None or student.school.longitude is None:
+                logger.warning(f"School coordinates missing for student {student.id}; cannot calculate to_school ETA")
+                return None
+            dest_lat = float(student.school.latitude)
+            dest_lng = float(student.school.longitude)
+            logger.info(f"ETA ({trip_status}): bus ({origin_lat}, {origin_lng}) -> school ({dest_lat}, {dest_lng})")
+        else:
+            if student.latitude is None or student.longitude is None:
+                logger.warning(f"Student {student.id} has no coordinates for ETA calculation")
+                return None
+            dest_lat = float(student.latitude)
+            dest_lng = float(student.longitude)
+            logger.info(f"ETA ({trip_status}): bus ({origin_lat}, {origin_lng}) -> student home ({dest_lat}, {dest_lng})")
         
         # Check cache first
         cache_key = f"eta:{bus_location.bus_id}:{student.id}:{trip_status}"

@@ -5,6 +5,7 @@ from datetime import date, datetime
 
 from ..database.models.attendance_log import AttendanceLog
 from ..database.models.bus import Bus as BusModel
+from ..database.models.school import School as SchoolModel
 
 class AttendanceService:
     def __init__(self, db: AsyncSession):
@@ -18,7 +19,8 @@ class AttendanceService:
         student_id: Optional[str] = None, 
         skip: int = 0, 
         limit: int = 100,
-        current_user_org_id: Optional[str] = None
+        current_user_org_id: Optional[str] = None,
+        current_user_org_type: Optional[str] = None
     ) -> Tuple[List[AttendanceLog], int]:
         """
         Get attendance logs with tenant filtering and pagination.
@@ -28,10 +30,18 @@ class AttendanceService:
         query = select(AttendanceLog)
         count_query = select(func.count()).select_from(AttendanceLog)
         
-        # Tenant filter - join with bus to filter by org
+        # Tenant filter
         if current_user_org_id is not None:
-            query = query.join(BusModel).where(BusModel.organization_id == current_user_org_id)
-            count_query = count_query.join(BusModel).where(BusModel.organization_id == current_user_org_id)
+            if current_user_org_type == "school":
+                query = query.join(BusModel).join(SchoolModel).where(
+                    SchoolModel.organization_id == current_user_org_id
+                )
+                count_query = count_query.join(BusModel).join(SchoolModel).where(
+                    SchoolModel.organization_id == current_user_org_id
+                )
+            else:
+                query = query.join(BusModel).where(BusModel.organization_id == current_user_org_id)
+                count_query = count_query.join(BusModel).where(BusModel.organization_id == current_user_org_id)
         
         if start_date:
             query = query.where(AttendanceLog.log_time >= datetime.combine(start_date, datetime.min.time()))

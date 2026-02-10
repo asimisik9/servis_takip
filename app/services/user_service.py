@@ -72,6 +72,11 @@ class UserService:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Tenant admins cannot create super_admin users"
             )
+        if user.role == UserRole.admin and org_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Admin users must belong to an organization"
+            )
 
         new_user = UserModel(
             id=str(uuid4()),
@@ -126,6 +131,13 @@ class UserService:
         # Only Super Admin (current_user_org_id is None) can change organization info
         if user_update.organization_id is not None and current_user_org_id is None:
             db_user.organization_id = user_update.organization_id
+
+        # Defense-in-depth: admin role must always stay tenant-scoped.
+        if db_user.role == UserRole.admin and db_user.organization_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Admin users must belong to an organization"
+            )
             
         if user_update.password is not None:
             db_user.password_hash = hash_password(user_update.password)
