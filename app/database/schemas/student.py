@@ -6,7 +6,8 @@ class StudentBase(BaseModel):
     """Base schema for Student"""
     full_name: str = Field(..., min_length=1, max_length=200)
     student_number: str = Field(..., min_length=1, max_length=50)
-    school_id: str
+    school_id: Optional[str] = None
+    organization_id: Optional[str] = None
     address: Optional[str] = Field(None, max_length=500)
 
 class StudentCreate(StudentBase):
@@ -18,6 +19,7 @@ class StudentUpdate(BaseModel):
     full_name: Optional[str] = Field(None, min_length=1, max_length=200)
     student_number: Optional[str] = Field(None, min_length=1, max_length=50)
     school_id: Optional[str] = None
+    organization_id: Optional[str] = None
     address: Optional[str] = Field(None, max_length=500)
 
 class StudentAddressUpdate(BaseModel):
@@ -31,6 +33,7 @@ class Student(StudentBase):
     longitude: Optional[float] = None
     created_at: datetime
     school_name: Optional[str] = None
+    organization_name: Optional[str] = None
 
     class Config:
         """Pydantic configuration"""
@@ -41,6 +44,7 @@ class Student(StudentBase):
                 "full_name": "Ali Yılmaz",
                 "student_number": "2025001",
                 "school_id": "school123",
+                "organization_id": "org123",
                 "created_at": "2025-10-14T10:00:00"
             }
         }

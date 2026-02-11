@@ -1,8 +1,9 @@
 # app/database/schemas/organization.py
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, EmailStr, field_validator
 from typing import Optional
 from datetime import datetime, date
 from enum import Enum
+import re
 
 
 class OrganizationType(str, Enum):
@@ -16,8 +17,36 @@ class OrganizationBase(BaseModel):
     type: OrganizationType
 
 
+class OrganizationAdminCreate(BaseModel):
+    full_name: str = Field(..., min_length=2, max_length=255)
+    email: EmailStr
+    phone_number: str
+    password: str = Field(..., min_length=8, max_length=255)
+
+    @field_validator("phone_number")
+    @classmethod
+    def validate_phone(cls, v: str) -> str:
+        digits = re.sub(r"\D", "", v)
+        if len(digits) < 10:
+            raise ValueError("Phone number must contain at least 10 digits")
+        return v
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, v: str) -> str:
+        if len(v) < 8:
+            raise ValueError("Password must be at least 8 characters long")
+        if not re.search(r"[A-Z]", v):
+            raise ValueError("Password must contain at least one uppercase letter")
+        if not re.search(r"[a-z]", v):
+            raise ValueError("Password must contain at least one lowercase letter")
+        if not re.search(r"\d", v):
+            raise ValueError("Password must contain at least one digit")
+        return v
+
+
 class OrganizationCreate(OrganizationBase):
-    pass
+    admin: Optional[OrganizationAdminCreate] = None
 
 
 class OrganizationUpdate(BaseModel):

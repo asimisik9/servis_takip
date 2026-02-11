@@ -1,15 +1,14 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from fastapi import HTTPException, status
 from datetime import datetime, timezone
-from uuid import uuid4
 from jose import jwt, JWTError
 import logging
 
 from ..database.models.user import User as UserModel
 from ..database.schemas.user import UserCreate
 from ..core.security import (
-    hash_password, 
     verify_password, 
     create_access_token, 
     create_refresh_token,
@@ -26,52 +25,17 @@ class AuthService:
         self.db = db
 
     async def register_user(self, user_data: UserCreate) -> UserModel:
-        # Check email
-        query = select(UserModel).where(UserModel.email == user_data.email)
-        result = await self.db.execute(query)
-        if result.scalar_one_or_none():
-            raise HTTPException(status_code=400, detail="Email already registered")
-        
-        # Check phone
-        query = select(UserModel).where(UserModel.phone_number == user_data.phone_number)
-        result = await self.db.execute(query)
-        if result.scalar_one_or_none():
-            raise HTTPException(status_code=400, detail="Phone number already registered")
-        
-        hashed_password = hash_password(user_data.password)
-        
-        # Public registration is only allowed for 'veli' role.
-        # Admin and driver accounts must be created by an admin.
-        from ..database.models.user import UserRole
-        if user_data.role and user_data.role.value != UserRole.veli.value:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Public registration is only allowed for 'veli' role. Contact an admin for other roles."
-            )
-        
-        new_user = UserModel(
-            id=str(uuid4()),
-            full_name=user_data.full_name,
-            email=user_data.email,
-            phone_number=user_data.phone_number,
-            password_hash=hashed_password,
-            role=UserRole.veli,  # Always veli for public registration
-            created_at=datetime.now(timezone.utc)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Public registration is disabled. Contact your administrator.",
         )
-        
-        try:
-            self.db.add(new_user)
-            await self.db.commit()
-            await self.db.refresh(new_user)
-        except Exception as e:
-            await self.db.rollback()
-            if "unique" in str(e).lower() or "duplicate" in str(e).lower():
-                raise HTTPException(status_code=400, detail="Email or phone number already registered")
-            raise
-        return new_user
 
     async def authenticate_user(self, email: str, password: str):
-        query = select(UserModel).where(UserModel.email == email)
+        query = (
+            select(UserModel)
+            .options(selectinload(UserModel.organization))
+            .where(UserModel.email == email)
+        )
         result = await self.db.execute(query)
         user = result.scalar_one_or_none()
         
@@ -208,7 +172,11 @@ class AuthService:
         except JWTError:
             raise credentials_exception
             
-        query = select(UserModel).where(UserModel.email == email)
+        query = (
+            select(UserModel)
+            .options(selectinload(UserModel.organization))
+            .where(UserModel.email == email)
+        )
         result = await self.db.execute(query)
         user = result.scalar_one_or_none()
         

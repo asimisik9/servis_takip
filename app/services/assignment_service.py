@@ -10,8 +10,6 @@ from sqlalchemy.orm import selectinload
 from ..core.redis import redis_manager
 from ..database.models.bus import Bus as BusModel
 from ..database.models.parent_student_relation import ParentStudentRelation
-from ..database.models.school import School as SchoolModel
-from ..database.models.school_company_contract import SchoolCompanyContract as ContractModel
 from ..database.models.student import Student as StudentModel
 from ..database.models.student_bus_assignment import StudentBusAssignment
 from ..database.models.user import User as UserModel
@@ -23,31 +21,6 @@ class AssignmentService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    @staticmethod
-    def _ensure_parent_relation_write_allowed(current_user_org_type: Optional[str]) -> None:
-        if current_user_org_type == "transport_company":
-            raise HTTPException(
-                status_code=403,
-                detail="Transport company admins cannot modify parent-student relations",
-            )
-
-    async def _is_student_in_company_scope(self, student: StudentModel, company_org_id: str) -> bool:
-        school_org_id = student.school.organization_id if student.school else None
-        if school_org_id:
-            contract_query = select(ContractModel.id).where(
-                ContractModel.school_org_id == school_org_id,
-                ContractModel.company_org_id == company_org_id,
-                ContractModel.is_active == True,
-            )
-            if (await self.db.execute(contract_query)).scalar_one_or_none():
-                return True
-
-        assignment_query = select(StudentBusAssignment.id).join(BusModel).where(
-            StudentBusAssignment.student_id == student.id,
-            BusModel.organization_id == company_org_id,
-        )
-        return (await self.db.execute(assignment_query)).scalar_one_or_none() is not None
-
     async def _get_student_with_scope(
         self,
         student_id: str,
@@ -56,16 +29,11 @@ class AssignmentService:
     ) -> StudentModel:
         query = (
             select(StudentModel)
-            .options(selectinload(StudentModel.school))
+            .options(selectinload(StudentModel.school), selectinload(StudentModel.organization))
             .where(StudentModel.id == student_id)
         )
         if current_user_org_id:
-            if current_user_org_type == "transport_company":
-                student = (await self.db.execute(query)).scalar_one_or_none()
-                if not student or not await self._is_student_in_company_scope(student, current_user_org_id):
-                    raise HTTPException(status_code=404, detail="Student not found or access denied")
-                return student
-            query = query.join(SchoolModel).where(SchoolModel.organization_id == current_user_org_id)
+            query = query.where(StudentModel.organization_id == current_user_org_id)
 
         student = (await self.db.execute(query)).scalar_one_or_none()
         if not student:
@@ -80,10 +48,8 @@ class AssignmentService:
     ) -> BusModel:
         query = select(BusModel).where(BusModel.id == bus_id)
         if current_user_org_id:
-            if current_user_org_type == "school":
-                query = query.join(SchoolModel).where(SchoolModel.organization_id == current_user_org_id)
-            else:
-                query = query.where(BusModel.organization_id == current_user_org_id)
+            query = query.where(BusModel.organization_id == current_user_org_id)
+
         bus = (await self.db.execute(query)).scalar_one_or_none()
         if not bus:
             raise HTTPException(status_code=404, detail="Bus not found or access denied")
@@ -96,8 +62,6 @@ class AssignmentService:
         current_user_org_id: Optional[str] = None,
         current_user_org_type: Optional[str] = None,
     ) -> ParentStudentRelation:
-        self._ensure_parent_relation_write_allowed(current_user_org_type)
-
         student = await self._get_student_with_scope(
             student_id,
             current_user_org_id=current_user_org_id,
@@ -105,11 +69,17 @@ class AssignmentService:
         )
 
         parent_query = select(UserModel).where(UserModel.id == parent_id)
-        if current_user_org_id and current_user_org_type != "transport_company":
-            parent_query = parent_query.where(UserModel.organization_id == current_user_org_id)
+        if student.organization_id is not None:
+            parent_query = parent_query.where(UserModel.organization_id == student.organization_id)
         parent = (await self.db.execute(parent_query)).scalar_one_or_none()
         if not parent or parent.role.value != "veli":
             raise HTTPException(status_code=400, detail="Parent not found, role is not veli, or access denied")
+
+        if parent.organization_id != student.organization_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Parent and Student must belong to the same organization",
+            )
 
         relation_query = select(ParentStudentRelation).where(
             ParentStudentRelation.student_id == student.id,
@@ -154,10 +124,20 @@ class AssignmentService:
             current_user_org_type=current_user_org_type,
         )
 
-        if student.school_id != bus.school_id:
+        if (
+            student.organization_id is None
+            or bus.organization_id is None
+            or student.organization_id != bus.organization_id
+        ):
             raise HTTPException(
                 status_code=400,
-                detail="Student and Bus must belong to the same school",
+                detail="Student and Bus must belong to the same organization",
+            )
+
+        if student.school_id and student.school_id != bus.school_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Student and Bus must belong to the same school when student has school_id",
             )
 
         exists_query = select(StudentBusAssignment).where(
@@ -229,6 +209,7 @@ class AssignmentService:
         limit: int = 100,
         current_user_org_id: Optional[str] = None,
         current_user_org_type: Optional[str] = None,
+        organization_filter: Optional[str] = None,
     ) -> Tuple[List[StudentBusAssignment], int]:
         query = select(StudentBusAssignment).options(
             selectinload(StudentBusAssignment.student).selectinload(StudentModel.school),
@@ -237,16 +218,11 @@ class AssignmentService:
         count_query = select(func.count()).select_from(StudentBusAssignment)
 
         if current_user_org_id is not None:
-            if current_user_org_type == "school":
-                query = query.join(StudentModel).join(SchoolModel).where(
-                    SchoolModel.organization_id == current_user_org_id
-                )
-                count_query = count_query.join(StudentModel).join(SchoolModel).where(
-                    SchoolModel.organization_id == current_user_org_id
-                )
-            else:
-                query = query.join(BusModel).where(BusModel.organization_id == current_user_org_id)
-                count_query = count_query.join(BusModel).where(BusModel.organization_id == current_user_org_id)
+            query = query.join(StudentModel).where(StudentModel.organization_id == current_user_org_id)
+            count_query = count_query.join(StudentModel).where(StudentModel.organization_id == current_user_org_id)
+        elif organization_filter is not None:
+            query = query.join(StudentModel).where(StudentModel.organization_id == organization_filter)
+            count_query = count_query.join(StudentModel).where(StudentModel.organization_id == organization_filter)
 
         total = (await self.db.execute(count_query)).scalar() or 0
         query = query.offset(skip).limit(limit)
@@ -259,6 +235,7 @@ class AssignmentService:
         limit: int = 100,
         current_user_org_id: Optional[str] = None,
         current_user_org_type: Optional[str] = None,
+        organization_filter: Optional[str] = None,
     ) -> Tuple[List[ParentStudentRelation], int]:
         query = select(ParentStudentRelation).options(
             selectinload(ParentStudentRelation.student).selectinload(StudentModel.school),
@@ -267,26 +244,11 @@ class AssignmentService:
         count_query = select(func.count()).select_from(ParentStudentRelation)
 
         if current_user_org_id is not None:
-            if current_user_org_type == "transport_company":
-                query = (
-                    query.join(ParentStudentRelation.student)
-                    .join(StudentBusAssignment)
-                    .join(BusModel)
-                    .where(BusModel.organization_id == current_user_org_id)
-                    .distinct(ParentStudentRelation.id)
-                )
-                count_query = select(func.count(func.distinct(ParentStudentRelation.id))).select_from(
-                    ParentStudentRelation
-                ).join(ParentStudentRelation.student).join(StudentBusAssignment).join(BusModel).where(
-                    BusModel.organization_id == current_user_org_id
-                )
-            else:
-                query = query.join(StudentModel).join(SchoolModel).where(
-                    SchoolModel.organization_id == current_user_org_id
-                )
-                count_query = count_query.join(StudentModel).join(SchoolModel).where(
-                    SchoolModel.organization_id == current_user_org_id
-                )
+            query = query.join(StudentModel).where(StudentModel.organization_id == current_user_org_id)
+            count_query = count_query.join(StudentModel).where(StudentModel.organization_id == current_user_org_id)
+        elif organization_filter is not None:
+            query = query.join(StudentModel).where(StudentModel.organization_id == organization_filter)
+            count_query = count_query.join(StudentModel).where(StudentModel.organization_id == organization_filter)
 
         total = (await self.db.execute(count_query)).scalar() or 0
         query = query.offset(skip).limit(limit)
@@ -305,12 +267,7 @@ class AssignmentService:
             .where(StudentBusAssignment.id == assignment_id)
         )
         if current_user_org_id:
-            if current_user_org_type == "school":
-                query = query.join(StudentModel).join(SchoolModel).where(
-                    SchoolModel.organization_id == current_user_org_id
-                )
-            else:
-                query = query.join(BusModel).where(BusModel.organization_id == current_user_org_id)
+            query = query.join(StudentModel).where(StudentModel.organization_id == current_user_org_id)
 
         assignment = (await self.db.execute(query)).scalar_one_or_none()
         if not assignment:
@@ -327,8 +284,6 @@ class AssignmentService:
         current_user_org_id: Optional[str] = None,
         current_user_org_type: Optional[str] = None,
     ):
-        self._ensure_parent_relation_write_allowed(current_user_org_type)
-
         query = (
             select(ParentStudentRelation)
             .options(selectinload(ParentStudentRelation.student).selectinload(StudentModel.school))
@@ -336,18 +291,7 @@ class AssignmentService:
         )
 
         if current_user_org_id:
-            if current_user_org_type == "transport_company":
-                query = (
-                    query.join(ParentStudentRelation.student)
-                    .join(StudentBusAssignment)
-                    .join(BusModel)
-                    .where(BusModel.organization_id == current_user_org_id)
-                    .distinct(ParentStudentRelation.id)
-                )
-            else:
-                query = query.join(StudentModel).join(SchoolModel).where(
-                    SchoolModel.organization_id == current_user_org_id
-                )
+            query = query.join(StudentModel).where(StudentModel.organization_id == current_user_org_id)
 
         relation = (await self.db.execute(query)).scalar_one_or_none()
         if not relation:

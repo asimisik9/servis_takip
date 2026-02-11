@@ -63,6 +63,7 @@ class BusService:
         current_user_org_id: Optional[str] = None,
         current_user_org_type: Optional[str] = None,
         school_id: Optional[str] = None,
+        organization_filter: Optional[str] = None,
     ) -> Tuple[List[BusModel], int]:
         query = select(BusModel).options(
             selectinload(BusModel.current_driver),
@@ -72,6 +73,10 @@ class BusService:
 
         query = self._apply_bus_scope(query, current_user_org_id, current_user_org_type)
         count_query = self._apply_bus_scope(count_query, current_user_org_id, current_user_org_type)
+
+        if current_user_org_id is None and organization_filter is not None:
+            query = query.where(BusModel.organization_id == organization_filter)
+            count_query = count_query.where(BusModel.organization_id == organization_filter)
 
         if school_id:
             query = query.where(BusModel.school_id == school_id)

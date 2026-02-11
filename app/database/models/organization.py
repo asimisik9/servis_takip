@@ -11,6 +11,7 @@ from ..database import Base
 if TYPE_CHECKING:
     from .user import User
     from .school import School
+    from .student import Student
     from .bus import Bus
     from .school_company_contract import SchoolCompanyContract
 
@@ -43,6 +44,9 @@ class Organization(Base):
     )
     schools: Mapped[list["School"]] = relationship(
         "School", back_populates="organization"
+    )
+    students: Mapped[list["Student"]] = relationship(
+        "Student", back_populates="organization"
     )
     buses: Mapped[list["Bus"]] = relationship(
         "Bus", back_populates="organization"

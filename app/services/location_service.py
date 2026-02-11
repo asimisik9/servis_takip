@@ -1,5 +1,5 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_
+from sqlalchemy import select
 from fastapi import status, WebSocket
 from jose import jwt, JWTError
 from datetime import datetime, timezone
@@ -70,15 +70,10 @@ class LocationService:
             if not user.organization_id:
                 return False
 
-            # Admin can only monitor buses within their tenant scope.
-            stmt = select(models.Bus).join(
-                models.School, models.School.id == models.Bus.school_id
-            ).where(
+            # Admin can only monitor buses within their own organization scope.
+            stmt = select(models.Bus).where(
                 models.Bus.id == bus_id,
-                or_(
-                    models.Bus.organization_id == user.organization_id,
-                    models.School.organization_id == user.organization_id,
-                ),
+                models.Bus.organization_id == user.organization_id,
             )
             result = await self.db.execute(stmt)
             return result.scalar_one_or_none() is not None

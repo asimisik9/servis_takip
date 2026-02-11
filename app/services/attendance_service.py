@@ -5,7 +5,6 @@ from datetime import date, datetime
 
 from ..database.models.attendance_log import AttendanceLog
 from ..database.models.bus import Bus as BusModel
-from ..database.models.school import School as SchoolModel
 
 class AttendanceService:
     def __init__(self, db: AsyncSession):
@@ -32,16 +31,8 @@ class AttendanceService:
         
         # Tenant filter
         if current_user_org_id is not None:
-            if current_user_org_type == "school":
-                query = query.join(BusModel).join(SchoolModel).where(
-                    SchoolModel.organization_id == current_user_org_id
-                )
-                count_query = count_query.join(BusModel).join(SchoolModel).where(
-                    SchoolModel.organization_id == current_user_org_id
-                )
-            else:
-                query = query.join(BusModel).where(BusModel.organization_id == current_user_org_id)
-                count_query = count_query.join(BusModel).where(BusModel.organization_id == current_user_org_id)
+            query = query.join(BusModel).where(BusModel.organization_id == current_user_org_id)
+            count_query = count_query.join(BusModel).where(BusModel.organization_id == current_user_org_id)
         
         if start_date:
             query = query.where(AttendanceLog.log_time >= datetime.combine(start_date, datetime.min.time()))

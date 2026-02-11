@@ -5,17 +5,20 @@ from sqlalchemy.orm import selectinload
 from fastapi import HTTPException
 from uuid import uuid4
 from typing import List, Optional
-from datetime import date
+from datetime import date, datetime, timezone
 import logging
 
 from ..database.models.organization import Organization as OrganizationModel, OrganizationType
 from ..database.models.school_company_contract import SchoolCompanyContract as ContractModel
+from ..database.models.user import User as UserModel, UserRole
 from ..database.schemas.organization import (
-    OrganizationCreate, 
-    OrganizationUpdate, 
+    OrganizationCreate,
+    OrganizationUpdate,
+    OrganizationAdminCreate,
     SchoolCompanyContractCreate,
-    SchoolCompanyContractUpdate
+    SchoolCompanyContractUpdate,
 )
+from ..core.security import hash_password
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +28,37 @@ class OrganizationService:
         self.db = db
 
     # ===== Organization CRUD =====
-    
+
+    async def _create_organization_admin(
+        self,
+        organization_id: str,
+        admin_data: OrganizationAdminCreate,
+    ) -> UserModel:
+        email_exists = (await self.db.execute(
+            select(UserModel.id).where(UserModel.email == admin_data.email)
+        )).scalar_one_or_none()
+        if email_exists:
+            raise HTTPException(status_code=400, detail="Admin email already registered")
+
+        phone_exists = (await self.db.execute(
+            select(UserModel.id).where(UserModel.phone_number == admin_data.phone_number)
+        )).scalar_one_or_none()
+        if phone_exists:
+            raise HTTPException(status_code=400, detail="Admin phone number already registered")
+
+        admin_user = UserModel(
+            id=str(uuid4()),
+            full_name=admin_data.full_name,
+            email=admin_data.email,
+            phone_number=admin_data.phone_number,
+            password_hash=hash_password(admin_data.password),
+            role=UserRole.admin,
+            organization_id=organization_id,
+            created_at=datetime.now(timezone.utc),
+        )
+        self.db.add(admin_user)
+        return admin_user
+
     async def create_organization(self, data: OrganizationCreate) -> OrganizationModel:
         """Yeni organization oluştur (okul veya servis şirketi)"""
         org = OrganizationModel(
@@ -34,9 +67,16 @@ class OrganizationService:
             type=OrganizationType(data.type.value)
         )
         self.db.add(org)
+
+        if data.admin is not None:
+            await self._create_organization_admin(org.id, data.admin)
+
         await self.db.commit()
         await self.db.refresh(org)
-        logger.info(f"Created organization: {org.name} (type={org.type.value})")
+        if data.admin is not None:
+            logger.info(f"Created organization with admin: {org.name} (type={org.type.value})")
+        else:
+            logger.info(f"Created organization: {org.name} (type={org.type.value})")
         return org
 
     async def get_organization(self, org_id: str) -> OrganizationModel:

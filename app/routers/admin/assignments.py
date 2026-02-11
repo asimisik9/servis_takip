@@ -66,15 +66,18 @@ async def list_student_bus_assignments(
     current_user: Annotated[User, Depends(get_current_admin_user)],
     db: AsyncSession = Depends(get_db),
     skip: int = Query(default=0, ge=0),
-    limit: int = Query(default=100, ge=1, le=500)
+    limit: int = Query(default=100, ge=1, le=500),
+    organization_id: Annotated[str | None, Query()] = None,
 ):
     service = AssignmentService(db)
     org_type = current_user.organization.type.value if current_user.organization else None
+    org_filter = organization_id if current_user.role.value == "super_admin" else None
     assignments, total = await service.get_student_bus_assignments(
         skip=skip, 
         limit=limit,
         current_user_org_id=current_user.organization_id,
-        current_user_org_type=org_type
+        current_user_org_type=org_type,
+        organization_filter=org_filter,
     )
     return PaginatedResponse(items=assignments, total=total, skip=skip, limit=limit)
 
@@ -83,15 +86,18 @@ async def list_parent_student_relations(
     current_user: Annotated[User, Depends(get_current_admin_user)],
     db: AsyncSession = Depends(get_db),
     skip: int = Query(default=0, ge=0),
-    limit: int = Query(default=100, ge=1, le=500)
+    limit: int = Query(default=100, ge=1, le=500),
+    organization_id: Annotated[str | None, Query()] = None,
 ):
     service = AssignmentService(db)
     org_type = current_user.organization.type.value if current_user.organization else None
+    org_filter = organization_id if current_user.role.value == "super_admin" else None
     relations, total = await service.get_parent_student_relations(
         skip=skip, 
         limit=limit,
         current_user_org_id=current_user.organization_id,
-        current_user_org_type=org_type
+        current_user_org_type=org_type,
+        organization_filter=org_filter,
     )
     return PaginatedResponse(items=relations, total=total, skip=skip, limit=limit)
 

@@ -27,7 +27,6 @@ from ..database.models.notification import (
 )
 from ..database.models.user import User as UserModel
 from ..database.models.student import Student as StudentModel
-from ..database.models.school import School as SchoolModel
 from ..database.models.bus import Bus as BusModel
 from ..database.models.parent_student_relation import ParentStudentRelation
 from ..database.models.student_bus_assignment import StudentBusAssignment
@@ -115,34 +114,24 @@ class NotificationService:
             if not sender_user.organization_id:
                 return False
 
-            school_scope_query = (
+            admin_scope_query = (
                 select(StudentModel.id)
-                .join(SchoolModel, SchoolModel.id == StudentModel.school_id)
                 .where(
                     StudentModel.id == student_id,
-                    SchoolModel.organization_id == sender_user.organization_id,
+                    StudentModel.organization_id == sender_user.organization_id,
                 )
             )
-            if (await self.db.execute(school_scope_query)).scalar_one_or_none():
-                return True
-
-            company_scope_query = (
-                select(StudentBusAssignment.id)
-                .join(BusModel, BusModel.id == StudentBusAssignment.bus_id)
-                .where(
-                    StudentBusAssignment.student_id == student_id,
-                    BusModel.organization_id == sender_user.organization_id,
-                )
-            )
-            return (await self.db.execute(company_scope_query)).scalar_one_or_none() is not None
+            return (await self.db.execute(admin_scope_query)).scalar_one_or_none() is not None
 
         if role == "sofor":
             driver_scope_query = (
                 select(StudentBusAssignment.id)
                 .join(BusModel, BusModel.id == StudentBusAssignment.bus_id)
+                .join(StudentModel, StudentModel.id == StudentBusAssignment.student_id)
                 .where(
                     StudentBusAssignment.student_id == student_id,
                     BusModel.current_driver_id == sender_user.id,
+                    StudentModel.organization_id == sender_user.organization_id,
                 )
             )
             return (await self.db.execute(driver_scope_query)).scalar_one_or_none() is not None
@@ -167,18 +156,10 @@ class NotificationService:
         if not recipient:
             return False
 
-        if sender_user.organization_id and recipient.organization_id == sender_user.organization_id:
-            return True
+        if not sender_user.organization_id:
+            return False
 
-        # Allow parent notifications for students inside sender scope even if parent tenant differs.
-        if student_id and await self._is_student_in_user_scope(sender_user, student_id):
-            relation_query = select(ParentStudentRelation.id).where(
-                ParentStudentRelation.parent_id == recipient_id,
-                ParentStudentRelation.student_id == student_id,
-            )
-            return (await self.db.execute(relation_query)).scalar_one_or_none() is not None
-
-        return False
+        return recipient.organization_id == sender_user.organization_id
 
     async def prevalidate_bulk_notification_targets(
         self,

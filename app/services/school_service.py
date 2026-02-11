@@ -9,7 +9,7 @@ import logging
 
 from ..core.config import settings
 from ..database.models.school import School as SchoolModel
-from ..database.models.organization import Organization as OrganizationModel, OrganizationType
+from ..database.models.organization import Organization as OrganizationModel
 from ..database.models.user import User as UserModel
 from ..database.models.student import Student as StudentModel
 from ..database.models.bus import Bus as BusModel
@@ -22,16 +22,11 @@ class SchoolService:
         self.db = db
 
     async def _validate_school_organization(self, organization_id: str) -> OrganizationModel:
-        """School records must always be attached to a school-type organization."""
+        """School organization must exist and be active."""
         query = select(OrganizationModel).where(OrganizationModel.id == organization_id)
         organization = (await self.db.execute(query)).scalar_one_or_none()
         if not organization:
             raise HTTPException(status_code=400, detail="Organization not found")
-        if organization.type != OrganizationType.school:
-            raise HTTPException(
-                status_code=400,
-                detail="School organization must be of type 'school'"
-            )
         if not organization.is_active:
             raise HTTPException(status_code=400, detail="Organization is inactive")
         return organization
@@ -64,10 +59,13 @@ class SchoolService:
         self, 
         skip: int = 0, 
         limit: int = 100,
-        current_user_org_id: Optional[str] = None
+        current_user_org_id: Optional[str] = None,
+        organization_filter: Optional[str] = None,
     ) -> Tuple[List[SchoolModel], int]:
         """
         Get schools with tenant filtering and total count.
+        current_user_org_id: tenant admin scope
+        organization_filter: optional super-admin filter by organization_id
         Returns: (schools, total_count)
         """
         query = select(SchoolModel).options(selectinload(SchoolModel.contact_person))
@@ -77,6 +75,9 @@ class SchoolService:
         if current_user_org_id is not None:
             query = query.where(SchoolModel.organization_id == current_user_org_id)
             count_query = count_query.where(SchoolModel.organization_id == current_user_org_id)
+        elif organization_filter is not None:
+            query = query.where(SchoolModel.organization_id == organization_filter)
+            count_query = count_query.where(SchoolModel.organization_id == organization_filter)
         
         # Get total count
         total = (await self.db.execute(count_query)).scalar() or 0
@@ -118,20 +119,29 @@ class SchoolService:
             if not contact_person:
                 raise HTTPException(status_code=400, detail="Contact person not found or access denied")
 
-        organization_id = current_user_org_id
+        if current_user_org_id is not None:
+            if school.organization_id and school.organization_id != current_user_org_id:
+                raise HTTPException(status_code=403, detail="Cannot override tenant organization")
+            organization_id = current_user_org_id
+        else:
+            organization_id = school.organization_id
 
-        # Super admin flow: infer organization from contact person.
+        # Super admin flow fallback: infer organization from contact person when missing.
         if organization_id is None:
             organization_id = contact_person.organization_id if contact_person else None
             if organization_id is None:
                 raise HTTPException(
                     status_code=400,
-                    detail="School organization could not be inferred. Provide a contact person in target organization."
+                    detail="organization_id is required for super_admin school creation",
                 )
 
         await self._validate_school_organization(organization_id)
 
-        if contact_person and contact_person.organization_id != organization_id:
+        if (
+            contact_person
+            and contact_person.organization_id is not None
+            and contact_person.organization_id != organization_id
+        ):
             raise HTTPException(
                 status_code=400,
                 detail="Contact person must belong to the school's organization"
@@ -169,12 +179,30 @@ class SchoolService:
             if (await self.db.execute(query)).scalar_one_or_none():
                 raise HTTPException(status_code=400, detail="School name already exists")
 
-        if school_update.contact_person_id:
-            query = select(UserModel).where(
-                UserModel.id == school_update.contact_person_id,
-                UserModel.organization_id == db_school.organization_id
-            )
-            if not (await self.db.execute(query)).scalar_one_or_none():
+        target_organization_id = db_school.organization_id
+        if current_user_org_id is not None:
+            if school_update.organization_id and school_update.organization_id != current_user_org_id:
+                raise HTTPException(status_code=403, detail="Cannot override tenant organization")
+            target_organization_id = current_user_org_id
+        elif "organization_id" in school_update.model_fields_set:
+            target_organization_id = school_update.organization_id
+
+        if not target_organization_id:
+            raise HTTPException(status_code=400, detail="organization_id cannot be empty for schools")
+        await self._validate_school_organization(target_organization_id)
+
+        if "contact_person_id" in school_update.model_fields_set and school_update.contact_person_id is None:
+            raise HTTPException(status_code=400, detail="contact_person_id cannot be empty")
+
+        if "contact_person_id" in school_update.model_fields_set and school_update.contact_person_id is not None:
+            query = select(UserModel).where(UserModel.id == school_update.contact_person_id)
+            contact_person = (await self.db.execute(query)).scalar_one_or_none()
+            if not contact_person:
+                raise HTTPException(status_code=400, detail="Contact person not found")
+            if (
+                contact_person.organization_id is not None
+                and contact_person.organization_id != target_organization_id
+            ):
                 raise HTTPException(status_code=400, detail="Contact person not found or access denied")
 
         if school_update.school_name is not None:
@@ -188,8 +216,12 @@ class SchoolService:
             db_school.longitude = lng
             logger.info(f"Updated school {school_id} coordinates to ({lat}, {lng})")
         
-        if school_update.contact_person_id is not None:
+        if "contact_person_id" in school_update.model_fields_set:
             db_school.contact_person_id = school_update.contact_person_id
+        if current_user_org_id is not None:
+            db_school.organization_id = current_user_org_id
+        elif "organization_id" in school_update.model_fields_set:
+            db_school.organization_id = school_update.organization_id
 
         await self.db.commit()
         await self.db.refresh(db_school)

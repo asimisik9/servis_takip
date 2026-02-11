@@ -19,17 +19,20 @@ async def list_buses(
     db: AsyncSession = Depends(get_db),
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=20, ge=1, le=100),
-    school_id: Annotated[str | None, Query()] = None
+    school_id: Annotated[str | None, Query()] = None,
+    organization_id: Annotated[str | None, Query()] = None,
 ):
     """List buses with tenant filtering and pagination."""
     service = BusService(db)
     org_type = current_user.organization.type.value if current_user.organization else None
+    org_filter = organization_id if current_user.role.value == "super_admin" else None
     buses, total = await service.get_buses(
         skip=skip, 
         limit=limit, 
         current_user_org_id=current_user.organization_id,
         current_user_org_type=org_type,
-        school_id=school_id
+        school_id=school_id,
+        organization_filter=org_filter,
     )
     return PaginatedResponse(items=buses, total=total, skip=skip, limit=limit)
 

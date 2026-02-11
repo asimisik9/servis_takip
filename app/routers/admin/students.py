@@ -17,15 +17,18 @@ async def list_students(
     db: AsyncSession = Depends(get_db),
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=20, ge=1, le=100),
-    school_id: Annotated[str | None, Query()] = None
+    school_id: Annotated[str | None, Query()] = None,
+    organization_id: Annotated[str | None, Query()] = None,
 ):
     """List students with tenant filtering and pagination."""
     service = StudentService(db)
+    org_filter = organization_id if current_user.role.value == "super_admin" else None
     students, total = await service.get_students(
         skip=skip, 
         limit=limit, 
         current_user_org_id=current_user.organization_id,
-        school_id=school_id
+        school_id=school_id,
+        organization_filter=org_filter,
     )
     return PaginatedResponse(items=students, total=total, skip=skip, limit=limit)
 
@@ -53,8 +56,8 @@ async def get_student(
         raise HTTPException(status_code=404, detail="Student not found")
         
     # Manual tenant check for read
-    if current_user.organization_id and student.school.organization_id != current_user.organization_id:
-         raise HTTPException(status_code=404, detail="Student not found") # Hide existence
+    if current_user.organization_id and student.organization_id != current_user.organization_id:
+        raise HTTPException(status_code=404, detail="Student not found")  # Hide existence
          
     return student
 

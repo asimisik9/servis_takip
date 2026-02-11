@@ -28,7 +28,7 @@ class LoginResponse(BaseModel):
     token_type: str
     user: User
 
-@router.post("/register", response_model=User, status_code=status.HTTP_201_CREATED)
+@router.post("/register", status_code=status.HTTP_403_FORBIDDEN)
 @limiter.limit("3/minute")
 async def register(
     request: Request,
@@ -36,10 +36,9 @@ async def register(
     auth_service: AuthService = Depends(get_auth_service)
 ):
     """
-    Yeni kullanıcı kaydı oluşturur.
+    Public kayıt kapalıdır.
     """
-    new_user = await auth_service.register_user(user_data)
-    return User.model_validate(new_user)
+    await auth_service.register_user(user_data)
 
 @router.post("/login", response_model=LoginResponse)
 @limiter.limit("20/minute")

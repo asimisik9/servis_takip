@@ -10,17 +10,19 @@ class SchoolBase(BaseModel):
 
 class SchoolCreate(SchoolBase):
     """Schema for creating a new School"""
-    pass
+    organization_id: Optional[str] = None
 
 class SchoolUpdate(BaseModel):
     """Schema for updating a School"""
     school_name: Optional[str] = Field(None, min_length=1, max_length=200)
     school_address: Optional[str] = Field(None, min_length=1, max_length=500)
     contact_person_id: Optional[str] = None
+    organization_id: Optional[str] = None
 
 class School(SchoolBase):
     """Schema for School responses"""
     id: str
+    organization_id: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     contact_person_name: Optional[str] = None
