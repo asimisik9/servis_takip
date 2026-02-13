@@ -1,7 +1,7 @@
 # app/models/student.py
 from __future__ import annotations
 from typing import TYPE_CHECKING, Optional
-from sqlalchemy import String, ForeignKey, DateTime, Float
+from sqlalchemy import String, ForeignKey, DateTime, Float, inspect as sa_inspect
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from datetime import datetime, timezone
 
@@ -51,10 +51,22 @@ class Student(Base):
         "AttendanceLog", back_populates="student"
     )
 
+    def _get_loaded_relation(self, relation_name: str):
+        """
+        Return relation object only if already loaded.
+        Prevents accidental async lazy-load during response serialization.
+        """
+        state = sa_inspect(self)
+        if relation_name in state.unloaded or relation_name in state.expired_attributes:
+            return None
+        return getattr(self, relation_name, None)
+
     @property
     def school_name(self) -> str | None:
-        return self.school.school_name if self.school else None
+        school = self._get_loaded_relation("school")
+        return school.school_name if school else None
 
     @property
     def organization_name(self) -> str | None:
-        return self.organization.name if self.organization else None
+        organization = self._get_loaded_relation("organization")
+        return organization.name if organization else None

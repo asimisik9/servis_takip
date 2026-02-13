@@ -14,6 +14,16 @@ class DriverService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
+    @staticmethod
+    def _to_db_naive_utc(value: datetime) -> datetime:
+        """
+        Normalize datetime values for DB columns defined as TIMESTAMP WITHOUT TIME ZONE.
+        Keeps naive values as-is and converts aware values to naive UTC.
+        """
+        if value.tzinfo is None:
+            return value
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+
     async def get_driver_bus(self, driver_id: str) -> Optional[models.Bus]:
         query = select(models.Bus).where(models.Bus.current_driver_id == driver_id)
         result = await self.db.execute(query)
@@ -29,15 +39,19 @@ class DriverService:
         if not bus:
             raise ResourceNotFoundException("Driver has no assigned bus")
         
-        # school ilişkisini eager load yapıyoruz
+        # Eager-load relations used by Student response schema to avoid async lazy-load
+        # errors during FastAPI serialization.
         query = (
             select(models.Student)
             .join(models.StudentBusAssignment)
             .where(models.StudentBusAssignment.bus_id == bus.id)
-            .options(selectinload(models.Student.school))
+            .options(
+                selectinload(models.Student.school),
+                selectinload(models.Student.organization),
+            )
         )
         result = await self.db.execute(query)
-        return result.scalars().all()
+        return result.scalars().unique().all()
 
     async def create_attendance_log(self, driver_id: str, attendance: AttendanceLogRequest) -> models.AttendanceLog:
         bus = await self.get_driver_bus(driver_id)
@@ -61,7 +75,7 @@ class DriverService:
             status=attendance.status,
             latitude=attendance.latitude,
             longitude=attendance.longitude,
-            log_time=attendance.log_time
+            log_time=self._to_db_naive_utc(attendance.log_time)
         )
         self.db.add(new_log)
         await self.db.commit()
@@ -79,7 +93,7 @@ class DriverService:
             latitude=location.latitude,
             longitude=location.longitude,
             speed=location.speed,
-            timestamp=datetime.now(timezone.utc)
+            timestamp=self._to_db_naive_utc(datetime.now(timezone.utc))
         )
         self.db.add(new_location)
         await self.db.commit()
