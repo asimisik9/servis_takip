@@ -1,5 +1,5 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from fastapi import HTTPException
 from typing import List, Optional
 from datetime import date, datetime
@@ -15,6 +15,8 @@ from ..database.models.school import School as SchoolModel
 from sqlalchemy.orm import joinedload
 from ..database.models.bus import Bus
 from ..database.models.user import User
+from ..database.models.absence import Absence
+from ..database.schemas.absence import AbsenceStatusResponse
 from ..database.schemas.dashboard import DashboardResponse
 from ..database.schemas.student import StudentAddressUpdate
 from .student_service import StudentService
@@ -30,14 +32,16 @@ class ParentService:
         if not self.gmaps_api_key:
             logger.warning("Google Maps API key not configured for ETA calculation")
 
-    async def update_student_address(self, parent_id: str, student_id: str, address_update: StudentAddressUpdate):
-        # Check relation
+    async def _ensure_parent_student_relation(self, parent_id: str, student_id: str) -> None:
         query = select(ParentStudentRelation).where(
             ParentStudentRelation.parent_id == parent_id,
             ParentStudentRelation.student_id == student_id
         )
         if not (await self.db.execute(query)).scalar_one_or_none():
             raise HTTPException(status_code=404, detail="Student not found or not your child")
+
+    async def update_student_address(self, parent_id: str, student_id: str, address_update: StudentAddressUpdate):
+        await self._ensure_parent_student_relation(parent_id, student_id)
 
         # Use StudentService to update address
         student_service = StudentService(self.db)
@@ -55,13 +59,7 @@ class ParentService:
         return result.scalars().all()
 
     async def get_student_bus_location(self, parent_id: str, student_id: str) -> BusLocation:
-        # Check relation
-        query = select(ParentStudentRelation).where(
-            ParentStudentRelation.parent_id == parent_id,
-            ParentStudentRelation.student_id == student_id
-        )
-        if not (await self.db.execute(query)).scalar_one_or_none():
-            raise HTTPException(status_code=404, detail="Student not found or not your child")
+        await self._ensure_parent_student_relation(parent_id, student_id)
 
         # Get assignment
         query = select(StudentBusAssignment).where(StudentBusAssignment.student_id == student_id)
@@ -79,13 +77,7 @@ class ParentService:
         return bus_location
 
     async def get_student_attendance_history(self, parent_id: str, student_id: str, filter_date: Optional[date] = None) -> List[AttendanceLog]:
-        # Check relation
-        query = select(ParentStudentRelation).where(
-            ParentStudentRelation.parent_id == parent_id,
-            ParentStudentRelation.student_id == student_id
-        )
-        if not (await self.db.execute(query)).scalar_one_or_none():
-            raise HTTPException(status_code=404, detail="Student not found or not your child")
+        await self._ensure_parent_student_relation(parent_id, student_id)
 
         query = select(AttendanceLog).where(AttendanceLog.student_id == student_id)
         
@@ -99,13 +91,7 @@ class ParentService:
         return result.scalars().all()
 
     async def get_student_dashboard_data(self, parent_id: str, student_id: str) -> DashboardResponse:
-        # Check relation
-        query = select(ParentStudentRelation).where(
-            ParentStudentRelation.parent_id == parent_id,
-            ParentStudentRelation.student_id == student_id
-        )
-        if not (await self.db.execute(query)).scalar_one_or_none():
-            raise HTTPException(status_code=404, detail="Student not found or not your child")
+        await self._ensure_parent_student_relation(parent_id, student_id)
 
         # Get student with school info
         student_query = select(StudentModel).options(
@@ -282,20 +268,12 @@ class ParentService:
 
     async def report_absence(self, parent_id: str, student_id: str, absence_date: Optional[date] = None, reason: Optional[str] = None):
         from uuid import uuid4
-        from ..database.models.absence import Absence
-        
-        # Check relation
-        query = select(ParentStudentRelation).where(
-            ParentStudentRelation.parent_id == parent_id,
-            ParentStudentRelation.student_id == student_id
-        )
-        if not (await self.db.execute(query)).scalar_one_or_none():
-            raise HTTPException(status_code=404, detail="Student not found or not your child")
-        
+
+        await self._ensure_parent_student_relation(parent_id, student_id)
+
         target_date = absence_date or date.today()
         
         # Check if already reported for this date
-        from sqlalchemy import and_
         existing = await self.db.execute(
             select(Absence).where(
                 and_(
@@ -320,3 +298,57 @@ class ParentService:
         
         logger.info(f"Absence reported: student={student_id}, date={target_date}, parent={parent_id}")
         return absence
+
+    async def get_absence_status(
+        self,
+        parent_id: str,
+        student_id: str,
+        absence_date: Optional[date] = None
+    ) -> AbsenceStatusResponse:
+        await self._ensure_parent_student_relation(parent_id, student_id)
+
+        target_date = absence_date or date.today()
+        absence = (await self.db.execute(
+            select(Absence).where(
+                and_(
+                    Absence.student_id == student_id,
+                    Absence.absence_date == target_date
+                )
+            )
+        )).scalar_one_or_none()
+
+        if absence is None:
+            return AbsenceStatusResponse(is_absent_today=False, updated_at=None)
+
+        return AbsenceStatusResponse(
+            is_absent_today=True,
+            updated_at=absence.created_at
+        )
+
+    async def cancel_absence(
+        self,
+        parent_id: str,
+        student_id: str,
+        absence_date: Optional[date] = None
+    ) -> bool:
+        await self._ensure_parent_student_relation(parent_id, student_id)
+
+        target_date = absence_date or date.today()
+        absence = (await self.db.execute(
+            select(Absence).where(
+                and_(
+                    Absence.student_id == student_id,
+                    Absence.absence_date == target_date
+                )
+            )
+        )).scalar_one_or_none()
+
+        if absence is None:
+            logger.info(f"Absence cancellation skipped: no record for student={student_id}, date={target_date}")
+            return False
+
+        await self.db.delete(absence)
+        await self.db.commit()
+
+        logger.info(f"Absence cancelled: student={student_id}, date={target_date}, parent={parent_id}")
+        return True

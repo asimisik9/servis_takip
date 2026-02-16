@@ -12,6 +12,7 @@ from .attendance_log import AttendanceLog, AttendanceLogCreate, AttendanceLogUpd
 from .student_bus_assignment import StudentBusAssignment, StudentBusAssignmentCreate, StudentBusAssignmentUpdate, StudentBusAssignmentBase
 from .parent_student_relation import ParentStudentRelation, ParentStudentRelationCreate, ParentStudentRelationUpdate, ParentStudentRelationBase
 from .notification import Notification, NotificationCreate, NotificationUpdate, NotificationBase
+from .absence import AbsenceStatusResponse
 
 __all__ = [
     "School", "SchoolCreate", "SchoolUpdate", "SchoolBase",
@@ -23,4 +24,5 @@ __all__ = [
     "StudentBusAssignment", "StudentBusAssignmentCreate", "StudentBusAssignmentUpdate", "StudentBusAssignmentBase",
     "ParentStudentRelation", "ParentStudentRelationCreate", "ParentStudentRelationUpdate", "ParentStudentRelationBase",
     "Notification", "NotificationCreate", "NotificationUpdate", "NotificationBase",
+    "AbsenceStatusResponse",
 ]

@@ -5,6 +5,7 @@ from ..database.schemas.user import User
 from ..database.schemas.student import Student, StudentAddressUpdate
 from ..database.schemas.bus_location import BusLocation
 from ..database.schemas.attendance_log import AttendanceLog
+from ..database.schemas.absence import AbsenceStatusResponse
 from ..database.schemas.dashboard import DashboardResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -94,3 +95,32 @@ async def report_student_absence(
     service = ParentService(db)
     await service.report_absence(current_user.id, student_id)
     return {"message": "Absence reported successfully"}
+
+
+@router.get("/students/{student_id}/absence/status", response_model=AbsenceStatusResponse)
+async def get_student_absence_status(
+    student_id: str,
+    current_user: Annotated[User, Depends(get_current_parent_user)],
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Öğrencinin bugün için devamsızlık durumunu getirir.
+    """
+    service = ParentService(db)
+    return await service.get_absence_status(current_user.id, student_id)
+
+
+@router.delete("/students/{student_id}/absent")
+@limiter.limit("10/minute")
+async def cancel_student_absence(
+    request: Request,
+    student_id: str,
+    current_user: Annotated[User, Depends(get_current_parent_user)],
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Öğrencinin o gün için bildirilen devamsızlığını geri alır.
+    """
+    service = ParentService(db)
+    await service.cancel_absence(current_user.id, student_id)
+    return {"message": "Absence cancelled successfully"}
