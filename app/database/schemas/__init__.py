@@ -13,6 +13,12 @@ from .student_bus_assignment import StudentBusAssignment, StudentBusAssignmentCr
 from .parent_student_relation import ParentStudentRelation, ParentStudentRelationCreate, ParentStudentRelationUpdate, ParentStudentRelationBase
 from .notification import Notification, NotificationCreate, NotificationUpdate, NotificationBase
 from .absence import AbsenceStatusResponse
+from .auth import (
+    ForgotPasswordRequest,
+    ResetPasswordRequest,
+    ChangePasswordRequest,
+    AuthActionResponse,
+)
 
 __all__ = [
     "School", "SchoolCreate", "SchoolUpdate", "SchoolBase",
@@ -25,4 +31,5 @@ __all__ = [
     "ParentStudentRelation", "ParentStudentRelationCreate", "ParentStudentRelationUpdate", "ParentStudentRelationBase",
     "Notification", "NotificationCreate", "NotificationUpdate", "NotificationBase",
     "AbsenceStatusResponse",
+    "ForgotPasswordRequest", "ResetPasswordRequest", "ChangePasswordRequest", "AuthActionResponse",
 ]

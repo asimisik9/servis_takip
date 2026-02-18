@@ -18,4 +18,5 @@ from .notification import Notification, NotificationStatus, NotificationType
 from .audit_log import AuditLog
 from .token_blacklist import TokenBlacklist
 from .absence import Absence
-
+from .password_reset_token import PasswordResetToken
+from .email_verification_token import EmailVerificationToken

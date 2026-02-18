@@ -5,7 +5,7 @@ from jose import jwt, JWTError
 from datetime import datetime, timezone
 
 from ..database import models
-from ..core.security import SECRET_KEY, ALGORITHM
+from ..core.security import SECRET_KEY, ALGORITHM, is_token_stale_for_password_change
 from ..core.redis import redis_manager
 
 class LocationService:
@@ -53,6 +53,12 @@ class LocationService:
             query = select(models.User).where(models.User.email == email)
             result = await self.db.execute(query)
             user = result.scalar_one_or_none()
+
+            if user and is_token_stale_for_password_change(payload, user.password_changed_at):
+                return None
+
+            if user and not user.is_email_verified:
+                return None
             
             # Check is_active if field exists
             if user and hasattr(user, 'is_active') and not user.is_active:

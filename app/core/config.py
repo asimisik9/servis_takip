@@ -36,6 +36,18 @@ class Settings(BaseSettings):
     # Firebase Cloud Messaging
     FIREBASE_CREDENTIALS_PATH: Optional[str] = None  # Path to Firebase service account JSON
 
+    # SMTP / Password Reset
+    SMTP_HOST: Optional[str] = None
+    SMTP_PORT: int = 587
+    SMTP_USERNAME: Optional[str] = None
+    SMTP_PASSWORD: Optional[str] = None
+    SMTP_FROM_EMAIL: Optional[EmailStr] = None
+    SMTP_USE_TLS: bool = True
+    PASSWORD_RESET_TOKEN_EXPIRE_MINUTES: int = 30
+    PASSWORD_RESET_URL_BASE: Optional[AnyHttpUrl] = None
+    EMAIL_VERIFICATION_TOKEN_EXPIRE_HOURS: int = 24
+    EMAIL_VERIFY_REDIRECT_URL: Optional[AnyHttpUrl] = None
+
     # Initial Superuser
     FIRST_SUPERUSER: EmailStr = "admin@example.com"
     FIRST_SUPERUSER_PASSWORD: str  # No default — MUST be set via env var
@@ -52,6 +64,20 @@ class Settings(BaseSettings):
                 "FIREBASE_CREDENTIALS_PATH not set in production! "
                 "Push notifications will not work."
             )
+        return v
+
+    @field_validator("PASSWORD_RESET_TOKEN_EXPIRE_MINUTES")
+    @classmethod
+    def validate_password_reset_token_expire_minutes(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("PASSWORD_RESET_TOKEN_EXPIRE_MINUTES must be greater than 0")
+        return v
+
+    @field_validator("EMAIL_VERIFICATION_TOKEN_EXPIRE_HOURS")
+    @classmethod
+    def validate_email_verification_token_expire_hours(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("EMAIL_VERIFICATION_TOKEN_EXPIRE_HOURS must be greater than 0")
         return v
     
     # CORS
@@ -75,6 +101,29 @@ class Settings(BaseSettings):
     @property
     def SQLALCHEMY_DATABASE_URI(self) -> str:
         return f"postgresql+asyncpg://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@{self.POSTGRES_SERVER}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
+
+    @property
+    def SMTP_IS_CONFIGURED(self) -> bool:
+        return bool(
+            self.SMTP_HOST
+            and self.SMTP_USERNAME
+            and self.SMTP_PASSWORD
+            and self.SMTP_FROM_EMAIL
+        )
+
+    @property
+    def PASSWORD_RESET_IS_CONFIGURED(self) -> bool:
+        return bool(
+            self.SMTP_IS_CONFIGURED
+            and self.PASSWORD_RESET_URL_BASE
+        )
+
+    @property
+    def EMAIL_VERIFICATION_IS_CONFIGURED(self) -> bool:
+        return bool(
+            self.SMTP_IS_CONFIGURED
+            and self.EMAIL_VERIFY_REDIRECT_URL
+        )
 
     class Config:
         case_sensitive = True

@@ -1,5 +1,6 @@
 from typing import Annotated, List
-from fastapi import Depends, HTTPException, status
+from datetime import datetime, timezone
+from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordBearer
 from jose import jwt, JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,7 +10,7 @@ import logging
 from .database.database import AsyncSessionLocal
 from .database.models.user import User as UserModel, UserRole
 from .database.schemas.user import User
-from .core.security import SECRET_KEY, ALGORITHM
+from .core.security import SECRET_KEY, ALGORITHM, is_token_stale_for_password_change
 from .core.config import settings
 from .core.redis import redis_manager
 from .services.auth_service import AuthService
@@ -26,8 +27,20 @@ def get_auth_service(db: AsyncSession = Depends(get_db)) -> AuthService:
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/login")
 
+
+def _is_unverified_access_allowed(path: str) -> bool:
+    normalized_path = path.rstrip("/") or "/"
+    allowed_paths = {
+        f"{settings.API_V1_STR}/auth/me",
+        f"{settings.API_V1_STR}/auth/logout",
+        f"{settings.API_V1_STR}/auth/refresh",
+        f"{settings.API_V1_STR}/auth/resend-email-verification",
+    }
+    return normalized_path in allowed_paths
+
 async def get_current_user(
     token: Annotated[str, Depends(oauth2_scheme)],
+    request: Request,
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -52,7 +65,6 @@ async def get_current_user(
     # Fallback: Check DB blacklist if Redis missed (e.g. after Redis restart)
     try:
         from .database.models.token_blacklist import TokenBlacklist
-        from datetime import datetime, timezone
         stmt = select(TokenBlacklist).where(
             TokenBlacklist.token == token,
             TokenBlacklist.expires_at > datetime.now(timezone.utc)
@@ -98,6 +110,15 @@ async def get_current_user(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Account is deactivated"
+        )
+
+    if is_token_stale_for_password_change(payload, user.password_changed_at):
+        raise credentials_exception
+
+    if not user.is_email_verified and not _is_unverified_access_allowed(request.url.path):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Email verification required",
         )
     
     return User.model_validate(user)

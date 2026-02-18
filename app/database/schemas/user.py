@@ -72,6 +72,8 @@ class User(UserBase):
     """Schema for User responses"""
     id: str
     is_active: bool = True
+    is_email_verified: bool = False
+    email_verified_at: Optional[datetime] = None
     organization_id: Optional[str] = None
     organization_name: Optional[str] = None
     organization: Optional["Organization"] = None

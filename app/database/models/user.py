@@ -14,6 +14,8 @@ if TYPE_CHECKING:
     from .parent_student_relation import ParentStudentRelation
     from .attendance_log import AttendanceLog
     from .notification import Notification
+    from .password_reset_token import PasswordResetToken
+    from .email_verification_token import EmailVerificationToken
 
 class UserRole(enum.Enum):
     veli = "veli"
@@ -28,6 +30,9 @@ class User(Base):
     email: Mapped[str] = mapped_column(String, unique=True, index=True)
     phone_number: Mapped[str] = mapped_column(String, unique=True)
     password_hash: Mapped[str] = mapped_column(String)
+    password_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    is_email_verified: Mapped[bool] = mapped_column(default=False, nullable=False)
+    email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     role: Mapped[UserRole] = mapped_column(Enum(UserRole), default=UserRole.veli)
     fcm_token: Mapped[str | None] = mapped_column(String, nullable=True)
     is_active: Mapped[bool] = mapped_column(default=True)
@@ -58,6 +63,12 @@ class User(Base):
     )
     notifications: Mapped[list["Notification"]] = relationship(
         "Notification", back_populates="recipient"
+    )
+    password_reset_tokens: Mapped[list["PasswordResetToken"]] = relationship(
+        "PasswordResetToken", back_populates="user", cascade="all, delete-orphan"
+    )
+    email_verification_tokens: Mapped[list["EmailVerificationToken"]] = relationship(
+        "EmailVerificationToken", back_populates="user", cascade="all, delete-orphan"
     )
 
     @property
