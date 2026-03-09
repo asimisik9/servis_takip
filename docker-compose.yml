@@ -29,9 +29,8 @@ services:
       - POSTGRES_USER=${POSTGRES_USER:-isikasimm}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-mysecretpassword}
       - POSTGRES_DB=${POSTGRES_DB:-my-postgres-db}
-    # ports exposed only to internal network, not to host
-    expose:
-      - "5432"
+    ports:
+      - "5432:5432"
     restart: always
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-isikasimm}"]
@@ -41,8 +40,8 @@ services:
 
   redis:
     image: redis:7-alpine
-    expose:
-      - "6379"
+    ports:
+      - "6379:6379"
     restart: always
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]

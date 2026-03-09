@@ -129,7 +129,7 @@ async def get_bus_route(
         raise HTTPException(status_code=404, detail="Bus not found")
     
     try:
-        return await route_service.get_optimized_route(bus_id)
+        return await route_service.get_optimized_route(bus_id, current_user_org_id=str(current_user.organization_id))
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:

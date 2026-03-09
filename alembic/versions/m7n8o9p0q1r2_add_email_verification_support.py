@@ -53,8 +53,8 @@ def upgrade() -> None:
     if not _column_exists("users", "email_verified_at"):
         op.add_column("users", sa.Column("email_verified_at", sa.DateTime(timezone=True), nullable=True))
 
-    # Decision: all existing users become unverified.
-    op.execute("UPDATE users SET is_email_verified = false")
+    # Existing rows read as false via the server default; avoid touching rows here
+    # because unrelated legacy data can violate newer table constraints during UPDATE.
 
     if not _table_exists("email_verification_tokens"):
         op.create_table(

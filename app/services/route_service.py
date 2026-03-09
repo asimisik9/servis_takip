@@ -55,6 +55,7 @@ class RouteService:
         exclude_student_ids: Optional[List[str]] = None,
         include_all: bool = False,
         trip_type: str = "to_school",
+        current_user_org_id: Optional[str] = None,
     ) -> OptimizedRouteResponse:
         """
         Get optimized route for a bus with all assigned students
@@ -102,7 +103,7 @@ class RouteService:
             raise ValueError(f"Bus not found: {bus_id}")
         
         # Get student addresses with coordinates
-        stops = await self._get_student_stops(bus_id)
+        stops = await self._get_student_stops(bus_id, current_user_org_id=current_user_org_id)
 
         # Exclude visited or ignored students unless include_all=true
         if not include_all:
@@ -189,7 +190,7 @@ class RouteService:
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
     
-    async def _get_student_stops(self, bus_id: str) -> List[RouteStop]:
+    async def _get_student_stops(self, bus_id: str, current_user_org_id: Optional[str] = None) -> List[RouteStop]:
         """Get list of students assigned to bus with their coordinates"""
         # Eager-load related student to avoid async lazy-load (greenlet) issues
         query = (
@@ -197,6 +198,10 @@ class RouteService:
             .options(selectinload(StudentBusAssignment.student))
             .where(StudentBusAssignment.bus_id == bus_id)
         )
+        if current_user_org_id is not None:
+            query = query.join(BusModel, BusModel.id == StudentBusAssignment.bus_id).where(
+                BusModel.organization_id == current_user_org_id
+            )
         result = await self.db.execute(query)
         assignments = result.scalars().all()
         logger.info(f"Route: fetched {len(assignments)} assignments for bus {bus_id}")

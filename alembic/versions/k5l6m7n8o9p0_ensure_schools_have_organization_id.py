@@ -91,7 +91,7 @@ def upgrade() -> None:
     op.execute(
         """
         WITH single_org AS (
-            SELECT id
+            SELECT MIN(id) AS id
             FROM organizations
             HAVING COUNT(*) = 1
         )
