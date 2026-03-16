@@ -166,25 +166,35 @@ class AuthService:
             smtp.send_message(message)
 
     async def _send_password_reset_email(
-        self, recipient_email: str, recipient_name: str, reset_link: str
+        self, recipient_email: str, recipient_name: str, reset_link: str, raw_token: str = ""
     ) -> None:
-        subject = "Servis Now - Password Reset"
+        subject = "Servis Now - Sifre Sifirlama"
         expires_minutes = settings.PASSWORD_RESET_TOKEN_EXPIRE_MINUTES
 
         plain_body = (
-            f"Hello {recipient_name},\n\n"
-            "We received a request to reset your password.\n"
-            f"Use the following link within {expires_minutes} minutes:\n\n"
-            f"{reset_link}\n\n"
-            "If you did not request this, you can safely ignore this email."
+            f"Merhaba {recipient_name},\n\n"
+            "Sifre sifirlama talebiniz alindi.\n\n"
+            f"Asagidaki kodu mobil uygulamada veya web panelinde {expires_minutes} dakika icinde kullanin:\n\n"
+            f"Sifirlama Kodu: {raw_token}\n\n"
+            f"Veya su link ile sifrenizi sifirlayabilirsiniz:\n{reset_link}\n\n"
+            "Bu talebi siz yapmadiysan bu emaili gormezden gelebilirsiniz."
         )
         html_body = (
-            "<html><body>"
-            f"<p>Hello {recipient_name},</p>"
-            "<p>We received a request to reset your password.</p>"
-            f"<p>Please use this link within <b>{expires_minutes} minutes</b>:</p>"
-            f'<p><a href="{reset_link}">{reset_link}</a></p>'
-            "<p>If you did not request this, you can safely ignore this email.</p>"
+            "<html><body style='font-family: Arial, sans-serif; color: #333;'>"
+            f"<p>Merhaba <b>{recipient_name}</b>,</p>"
+            "<p>Sifre sifirlama talebiniz alindi.</p>"
+            f"<p>Asagidaki kodu <b>{expires_minutes} dakika</b> icinde kullanin:</p>"
+            "<div style='background: #f4f6f8; border: 1px solid #ddd; border-radius: 8px; "
+            "padding: 16px; margin: 16px 0; text-align: center;'>"
+            "<p style='margin: 0 0 4px 0; font-size: 13px; color: #666;'>Sifirlama Kodu</p>"
+            f"<p style='margin: 0; font-size: 16px; font-weight: bold; letter-spacing: 1px; "
+            f"word-break: break-all; color: #073662;'>{raw_token}</p>"
+            "</div>"
+            "<p style='font-size: 13px; color: #666;'>Veya web panelinden sifirlamak icin:</p>"
+            f'<p><a href="{reset_link}" style="color: #18A1D8;">{reset_link}</a></p>'
+            "<hr style='border: none; border-top: 1px solid #eee; margin: 24px 0;'>"
+            "<p style='font-size: 12px; color: #999;'>"
+            "Bu talebi siz yapmadiysan bu emaili gormezden gelebilirsiniz.</p>"
             "</body></html>"
         )
 
@@ -283,7 +293,7 @@ class AuthService:
                 await self.db.commit()
 
                 reset_link = self._build_password_reset_link(raw_token)
-                await self._send_password_reset_email(user.email, user.full_name, reset_link)
+                await self._send_password_reset_email(user.email, user.full_name, reset_link, raw_token)
         finally:
             try:
                 await redis_manager.set(cooldown_key, "1", ex=FORGOT_PASSWORD_COOLDOWN_SECONDS)
