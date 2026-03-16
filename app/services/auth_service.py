@@ -216,23 +216,31 @@ class AuthService:
     async def _send_email_verification_email(
         self, recipient_email: str, recipient_name: str, verification_link: str
     ) -> None:
-        subject = "Servis Now - Verify Your Email"
+        subject = "Servis Now - Email Dogrulama"
         expires_hours = settings.EMAIL_VERIFICATION_TOKEN_EXPIRE_HOURS
 
         plain_body = (
-            f"Hello {recipient_name},\n\n"
-            "Please verify your email to continue using your account.\n"
-            f"Use the following link within {expires_hours} hours:\n\n"
+            f"Merhaba {recipient_name},\n\n"
+            "Hesabinizi kullanmaya devam etmek icin email adresinizi dogrulayin.\n"
+            f"Asagidaki baglantiya {expires_hours} saat icinde tiklayin:\n\n"
             f"{verification_link}\n\n"
-            "If you did not request this, you can safely ignore this email."
+            "Bu talebi siz yapmadiysan bu emaili gormezden gelebilirsiniz."
         )
         html_body = (
-            "<html><body>"
-            f"<p>Hello {recipient_name},</p>"
-            "<p>Please verify your email to continue using your account.</p>"
-            f"<p>Use this link within <b>{expires_hours} hours</b>:</p>"
-            f'<p><a href="{verification_link}">{verification_link}</a></p>'
-            "<p>If you did not request this, you can safely ignore this email.</p>"
+            "<html><body style='font-family: Arial, sans-serif; color: #333;'>"
+            f"<p>Merhaba <b>{recipient_name}</b>,</p>"
+            "<p>Hesabinizi kullanmaya devam etmek icin email adresinizi dogrulayin.</p>"
+            f"<p>Asagidaki butona <b>{expires_hours} saat</b> icinde tiklayin:</p>"
+            "<div style='text-align: center; margin: 24px 0;'>"
+            f'<a href="{verification_link}" style="display: inline-block; background: #073662; '
+            f'color: #fff; padding: 12px 32px; border-radius: 8px; text-decoration: none; '
+            f'font-weight: bold; font-size: 16px;">Email Adresimi Dogrula</a>'
+            "</div>"
+            f'<p style="font-size: 13px; color: #666;">Buton calismiyorsa su linki kopyalayin:<br>'
+            f'<a href="{verification_link}" style="color: #18A1D8;">{verification_link}</a></p>'
+            "<hr style='border: none; border-top: 1px solid #eee; margin: 24px 0;'>"
+            "<p style='font-size: 12px; color: #999;'>"
+            "Bu talebi siz yapmadiysan bu emaili gormezden gelebilirsiniz.</p>"
             "</body></html>"
         )
 
@@ -512,7 +520,6 @@ class AuthService:
 
         token_hash = self._hash_reset_token(token.strip())
         now = datetime.now(timezone.utc)
-        redirect_base = str(settings.EMAIL_VERIFY_REDIRECT_URL)
 
         query = (
             select(EmailVerificationToken)
@@ -527,13 +534,13 @@ class AuthService:
         verification_token = result.scalar_one_or_none()
 
         if not verification_token or not verification_token.user:
-            return self._build_redirect_url_with_status(redirect_base, "invalid_or_expired")
+            return "invalid_or_expired"
 
         user = verification_token.user
         if user.is_email_verified:
             verification_token.used_at = now
             await self.db.commit()
-            return self._build_redirect_url_with_status(redirect_base, "already_verified")
+            return "already_verified"
 
         user.is_email_verified = True
         user.email_verified_at = now
@@ -550,7 +557,7 @@ class AuthService:
         )
 
         await self.db.commit()
-        return self._build_redirect_url_with_status(redirect_base, "success")
+        return "success"
 
     async def _blacklist_token(self, token: str, exp_timestamp: int):
         """Add token to Redis blacklist with TTL matching token expiry.

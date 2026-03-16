@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Body, Query
 from fastapi.security import OAuth2PasswordRequestForm
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse
 from typing import Annotated
 from ..database.schemas.user import User, UserCreate
 from ..database.schemas.auth import (
@@ -173,7 +173,7 @@ async def change_password(
     return AuthActionResponse(**result)
 
 
-@router.get("/verify-email")
+@router.get("/verify-email", response_class=HTMLResponse)
 @limiter.limit("20/minute")
 async def verify_email(
     request: Request,
@@ -181,22 +181,47 @@ async def verify_email(
     auth_service: AuthService = Depends(get_auth_service),
 ):
     try:
-        redirect_url = await auth_service.verify_email_token(token)
+        result_status = await auth_service.verify_email_token(token)
     except HTTPException:
         raise
     except Exception as exc:
         logger.error("Email verification failed unexpectedly: %s", exc)
-        if settings.EMAIL_VERIFY_REDIRECT_URL:
-            redirect_url = auth_service._build_redirect_url_with_status(
-                str(settings.EMAIL_VERIFY_REDIRECT_URL),
-                "error",
-            )
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Email verification failed.",
-            )
-    return RedirectResponse(url=redirect_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+        result_status = "error"
+    return HTMLResponse(content=_build_verification_html(result_status))
+
+
+def _build_verification_html(result_status: str) -> str:
+    messages = {
+        "success": ("Email Doğrulandı", "Email adresiniz başarıyla doğrulandı. Uygulamaya dönüp devam edebilirsiniz.", "✅", "#4CAF50"),
+        "already_verified": ("Zaten Doğrulanmış", "Email adresiniz zaten doğrulanmış. Uygulamaya dönüp devam edebilirsiniz.", "✅", "#2196F3"),
+        "invalid_or_expired": ("Geçersiz veya Süresi Dolmuş", "Doğrulama linki geçersiz veya süresi dolmuş. Lütfen uygulamadan yeni bir doğrulama emaili isteyin.", "❌", "#F44336"),
+        "error": ("Bir Hata Oluştu", "Email doğrulama sırasında bir hata oluştu. Lütfen tekrar deneyin.", "⚠️", "#FF9800"),
+    }
+    title, message, icon, color = messages.get(result_status, messages["error"])
+
+    return f"""<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{title} - Servis Now</title>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 20px; }}
+        .card {{ background: white; border-radius: 16px; padding: 48px 32px; max-width: 420px; width: 100%; text-align: center; box-shadow: 0 4px 24px rgba(0,0,0,0.1); }}
+        .icon {{ font-size: 64px; margin-bottom: 24px; }}
+        h1 {{ color: {color}; font-size: 22px; margin-bottom: 16px; }}
+        p {{ color: #666; font-size: 16px; line-height: 1.5; }}
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="icon">{icon}</div>
+        <h1>{title}</h1>
+        <p>{message}</p>
+    </div>
+</body>
+</html>"""
 
 
 @router.post("/resend-email-verification", response_model=AuthActionResponse)
