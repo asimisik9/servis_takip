@@ -88,12 +88,14 @@ class StudentService:
         result = await self.db.execute(query)
         return result.scalars().all(), total
 
-    async def get_student_by_id(self, student_id: str) -> Optional[StudentModel]:
+    async def get_student_by_id(self, student_id: str, org_id: Optional[str] = None) -> Optional[StudentModel]:
         query = (
             select(StudentModel)
             .options(selectinload(StudentModel.school), selectinload(StudentModel.organization))
             .where(StudentModel.id == student_id)
         )
+        if org_id:
+            query = query.where(StudentModel.organization_id == org_id)
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
 

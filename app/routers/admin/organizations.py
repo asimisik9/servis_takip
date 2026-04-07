@@ -75,7 +75,7 @@ async def create_contract(
     return await service.create_contract(data)
 
 
-@router.get("/contracts", response_model=List[SchoolCompanyContract])
+@router.get("/contracts", response_model=PaginatedResponse[SchoolCompanyContract])
 async def list_contracts(
     school_org_id: Optional[str] = Query(None),
     company_org_id: Optional[str] = Query(None),
@@ -100,13 +100,14 @@ async def list_contracts(
         else:
             company_org_id = current_user.organization_id
     
-    return await service.get_contracts(
+    contracts, total = await service.get_contracts(
         school_org_id=school_org_id,
         company_org_id=company_org_id,
         active_only=active_only,
         skip=skip,
-        limit=limit
+        limit=limit,
     )
+    return PaginatedResponse(items=contracts, total=total, skip=skip, limit=limit)
 
 
 @router.delete("/contracts/{contract_id}")

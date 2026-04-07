@@ -1,4 +1,6 @@
+import json
 from fastapi import APIRouter, Depends, Query, Request
+from fastapi.encoders import jsonable_encoder
 from typing import List, Annotated
 from datetime import date
 from ..database.schemas.user import User
@@ -12,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..dependencies import get_db, get_current_parent_user
 from ..services.parent_service import ParentService
 from ..core.limiter import limiter
+from ..core.redis import redis_manager
 
 router = APIRouter(
     prefix="/parent",
@@ -40,8 +43,15 @@ async def get_parent_students(
     """
     Velinin öğrencilerini listeler.
     """
+    cache_key = f"parent_students:{current_user.id}"
+    cached = await redis_manager.get(cache_key)
+    if cached:
+        return json.loads(cached)
+
     service = ParentService(db)
-    return await service.get_parent_students(current_user.id)
+    students = await service.get_parent_students(current_user.id)
+    await redis_manager.set(cache_key, json.dumps(jsonable_encoder(students)), ex=300)
+    return students
 
 @router.get("/students/{student_id}/bus/location", response_model=BusLocation)
 async def get_student_bus_location(

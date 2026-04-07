@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     
     # Security
     SECRET_KEY: str
-    REFRESH_SECRET_KEY: Optional[str] = None  # Falls back to SECRET_KEY + "_refresh" if not set
+    REFRESH_SECRET_KEY: str  # Must be set explicitly — never derived from SECRET_KEY
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
@@ -22,9 +22,9 @@ class Settings(BaseSettings):
     POSTGRES_SERVER: str
     POSTGRES_PORT: str = "5432"
     POSTGRES_DB: str
-    POSTGRES_POOL_SIZE: int = 20
-    POSTGRES_MAX_OVERFLOW: int = 10
-    POSTGRES_POOL_RECYCLE: int = 1800  # Recycle connections after 30 minutes
+    POSTGRES_POOL_SIZE: int = 50
+    POSTGRES_MAX_OVERFLOW: int = 20
+    POSTGRES_POOL_RECYCLE: int = 3600  # Recycle connections after 60 minutes
     
     # Redis
     REDIS_HOST: str = "redis"

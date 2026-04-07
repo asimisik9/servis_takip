@@ -1,4 +1,6 @@
+import json
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
+from fastapi.encoders import jsonable_encoder
 from typing import List, Annotated
 from ..database.schemas.user import User
 from ..database.schemas.student import Student
@@ -12,6 +14,7 @@ from ..services.driver_service import DriverService
 from ..services.route_service import RouteService
 from ..services.route_progress_service import RouteProgressService
 from ..core.limiter import limiter
+from ..core.redis import redis_manager
 
 router = APIRouter(
     prefix="/driver",
@@ -26,8 +29,15 @@ async def get_driver_roster(
     """
     Şoförün sorumlu olduğu servisteki öğrenci listesini getirir.
     """
+    cache_key = f"roster:{current_user.id}"
+    cached = await redis_manager.get(cache_key)
+    if cached:
+        return json.loads(cached)
+
     service = DriverService(db)
-    return await service.get_roster(current_user.id)
+    roster = await service.get_roster(current_user.id)
+    await redis_manager.set(cache_key, json.dumps(jsonable_encoder(roster)), ex=60)
+    return roster
 
 @router.post("/attendance/log", response_model=AttendanceLog)
 @limiter.limit("120/minute")

@@ -75,8 +75,10 @@ class UserService:
         result = await self.db.execute(query)
         return result.scalars().all(), total
 
-    async def get_user_by_id(self, user_id: str) -> Optional[UserModel]:
+    async def get_user_by_id(self, user_id: str, org_id: Optional[str] = None) -> Optional[UserModel]:
         query = select(UserModel).options(selectinload(UserModel.organization)).where(UserModel.id == user_id)
+        if org_id:
+            query = query.where(UserModel.organization_id == org_id)
         result = await self.db.execute(query)
         return result.scalar_one_or_none()
 

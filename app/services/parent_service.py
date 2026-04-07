@@ -33,9 +33,18 @@ class ParentService:
             logger.warning("Google Maps API key not configured for ETA calculation")
 
     async def _ensure_parent_student_relation(self, parent_id: str, student_id: str) -> None:
-        query = select(ParentStudentRelation).where(
-            ParentStudentRelation.parent_id == parent_id,
-            ParentStudentRelation.student_id == student_id
+        # Verify relation exists AND both parent and student belong to the same organization.
+        # Without the org check, a parent from Org A could access a student from Org B
+        # by guessing the student_id (cross-tenant data leak).
+        query = (
+            select(ParentStudentRelation)
+            .join(StudentModel, StudentModel.id == ParentStudentRelation.student_id)
+            .join(User, User.id == ParentStudentRelation.parent_id)
+            .where(
+                ParentStudentRelation.parent_id == parent_id,
+                ParentStudentRelation.student_id == student_id,
+                StudentModel.organization_id == User.organization_id,
+            )
         )
         if not (await self.db.execute(query)).scalar_one_or_none():
             raise HTTPException(status_code=404, detail="Student not found or not your child")
@@ -207,9 +216,10 @@ class ParentService:
             pass
         
         # Call Google Directions API (legacy but enabled)
+        stale_cache_key = f"eta_stale:{bus_location.bus_id}:{student.id}:{trip_status}"
         try:
             url = "https://maps.googleapis.com/maps/api/directions/json"
-            
+
             params = {
                 "origin": f"{origin_lat},{origin_lng}",
                 "destination": f"{dest_lat},{dest_lng}",
@@ -217,9 +227,12 @@ class ParentService:
                 "departure_time": "now",
                 "key": self.gmaps_api_key
             }
-            
+
             async with httpx.AsyncClient() as client:
-                response = await client.get(url, params=params, timeout=10.0)
+                response = await client.get(
+                    url, params=params,
+                    timeout=httpx.Timeout(5.0, connect=2.0),
+                )
                 
                 if response.status_code != 200:
                     logger.error(f"Directions API error: {response.status_code} - {response.text}")
@@ -253,17 +266,28 @@ class ParentService:
                 f"(distance: {distance_text})"
             )
             
-            # Cache for 2 minutes (ETA changes frequently with traffic)
+            # Cache for 2 minutes (fresh) and 10 minutes (stale fallback)
             try:
                 import json
-                await redis_manager.set(cache_key, json.dumps({"minutes": minutes}), ex=120)
+                payload = json.dumps({"minutes": minutes})
+                await redis_manager.set(cache_key, payload, ex=120)
+                await redis_manager.set(stale_cache_key, payload, ex=600)
             except Exception:
                 pass
-            
+
             return minutes
-            
+
         except Exception as e:
             logger.error(f"Failed to calculate ETA: {str(e)}")
+            # Return stale cached value rather than None when API is slow/down
+            try:
+                import json
+                stale = await redis_manager.get(stale_cache_key)
+                if stale:
+                    logger.info(f"Returning stale ETA for student {student.id}")
+                    return json.loads(stale)["minutes"]
+            except Exception:
+                pass
             return None
 
     async def report_absence(self, parent_id: str, student_id: str, absence_date: Optional[date] = None, reason: Optional[str] = None):

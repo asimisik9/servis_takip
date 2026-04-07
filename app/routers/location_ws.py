@@ -1,4 +1,4 @@
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, status
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
 from sqlalchemy import select
 from ..database.database import AsyncSessionLocal
 from ..core.redis import redis_manager
@@ -14,21 +14,64 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-async def save_location_to_db(bus_id: str, data: dict):
-    try:
-        async with AsyncSessionLocal() as db:
-            new_location = BusLocation(
-                id=str(uuid4()),
-                bus_id=bus_id,
-                latitude=data['latitude'],
-                longitude=data['longitude'],
-                speed=data.get('speed'),
-                timestamp=datetime.now(timezone.utc)
-            )
-            db.add(new_location)
-            await db.commit()
-    except Exception as e:
-        logger.error(f"Error saving location to DB for bus {bus_id}: {e}")
+# ─── Batch Location Writer ────────────────────────────────────────────────────
+# Instead of one DB commit per WS message (blocks the event loop and hammers DB),
+# push to an in-memory queue and flush every 5 seconds in a background task.
+_location_queue: asyncio.Queue = asyncio.Queue()
+
+
+async def batch_location_writer():
+    """Background task: batch-insert queued location updates every 5 seconds."""
+    while True:
+        await asyncio.sleep(5)
+        if _location_queue.empty():
+            continue
+        batch = []
+        while not _location_queue.empty():
+            try:
+                batch.append(_location_queue.get_nowait())
+            except asyncio.QueueEmpty:
+                break
+        if not batch:
+            continue
+        try:
+            async with AsyncSessionLocal() as db:
+                db.add_all([
+                    BusLocation(
+                        id=str(uuid4()),
+                        bus_id=item["bus_id"],
+                        latitude=item["latitude"],
+                        longitude=item["longitude"],
+                        speed=item.get("speed"),
+                        timestamp=item["timestamp"],
+                    )
+                    for item in batch
+                ])
+                await db.commit()
+                logger.info(f"Batch wrote {len(batch)} location record(s) to DB")
+        except Exception as e:
+            logger.error(f"Batch location write failed: {e}")
+
+
+# ─── Per-connection WS Rate Limiter ──────────────────────────────────────────
+
+def _make_ws_rate_limiter(max_messages: int = 120, window_seconds: int = 60):
+    """Returns a per-connection checker. Call it for every incoming message.
+    Returns False when the sliding-window limit is exceeded."""
+    from collections import deque
+    import time
+    timestamps: deque = deque()
+
+    def check() -> bool:
+        now = time.monotonic()
+        while timestamps and timestamps[0] < now - window_seconds:
+            timestamps.popleft()
+        if len(timestamps) >= max_messages:
+            return False
+        timestamps.append(now)
+        return True
+
+    return check
 
 
 def _validate_location_data(data: dict) -> bool:
@@ -49,19 +92,17 @@ def _validate_location_data(data: dict) -> bool:
         return False
 
 
-def _extract_ws_token(websocket: WebSocket, query_token: str | None) -> str | None:
-    """Prefer Authorization header token, keep query token as backward-compatible fallback."""
+def _extract_ws_token(websocket: WebSocket) -> str | None:
+    """Extract token from Authorization header only. Query param is not supported —
+    tokens in URLs are logged by servers and stored in browser history."""
     auth_header = websocket.headers.get("authorization")
     if auth_header and auth_header.lower().startswith("bearer "):
         return auth_header.split(" ", 1)[1].strip()
-    return query_token
+    return None
 
 
 @router.websocket("/ws/driver/location")
-async def driver_location_ws(
-    websocket: WebSocket,
-    token: str | None = Query(default=None)
-):
+async def driver_location_ws(websocket: WebSocket):
     """
     Şoförler için basitleştirilmiş WebSocket endpoint'i.
     Bus ID'yi token'dan bulur.
@@ -69,11 +110,11 @@ async def driver_location_ws(
     # Önce bağlantıyı kabul et, sonra kontrol et.
     # Bu sayede "Connection not upgraded" hatası yerine anlamlı bir WS kapanış kodu döneriz.
     await websocket.accept()
-    
+
     logger.info("WS Connection accepted. Verifying token...")
-    
+
     try:
-        token = _extract_ws_token(websocket, token)
+        token = _extract_ws_token(websocket)
         if not token:
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
@@ -103,25 +144,38 @@ async def driver_location_ws(
 
         redis = await redis_manager.get_redis()
         channel_name = f"bus:{bus_id}:location"
-        
+        rate_check = _make_ws_rate_limiter()
+
         try:
             while True:
                 data = await websocket.receive_text()
+
+                if not rate_check():
+                    logger.warning(f"WS rate limit exceeded for driver {user.id} — closing connection")
+                    await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+                    break
+
                 try:
                     json_data = json.loads(data)
-                    
+
                     if not _validate_location_data(json_data):
                         logger.warning(f"Invalid location data from driver {user.id}")
                         continue
-                    
+
                     logger.info(f"Received location from driver {user.id} for bus {bus_id}")
-                    
-                    # Redis kanalına yayınla
+
+                    # Publish to Redis pub/sub (real-time to subscribers)
                     await redis.publish(channel_name, json.dumps(json_data))
-                    
-                    # Apply backpressure: wait for DB persist before accepting next message.
-                    await save_location_to_db(bus_id, json_data)
-                    
+
+                    # Enqueue for batch DB write (flushed every 5 seconds)
+                    _location_queue.put_nowait({
+                        "bus_id": bus_id,
+                        "latitude": json_data["latitude"],
+                        "longitude": json_data["longitude"],
+                        "speed": json_data.get("speed"),
+                        "timestamp": datetime.now(timezone.utc),
+                    })
+
                 except json.JSONDecodeError:
                     logger.error(f"Invalid JSON received from driver {user.id}")
         except WebSocketDisconnect:
@@ -138,20 +192,16 @@ async def driver_location_ws(
             pass
 
 @router.websocket("/ws/bus/{bus_id}/location")
-async def bus_location_ws(
-    websocket: WebSocket, 
-    bus_id: str,
-    token: str | None = Query(default=None)
-):
+async def bus_location_ws(websocket: WebSocket, bus_id: str):
     """
     Otobüs konumu için WebSocket bağlantısı.
     Redis Pub/Sub kullanarak ölçeklenebilir yapı.
     """
     logger.info(f"Bus WS Connection attempt. Bus: {bus_id}")
     await websocket.accept()
-    
+
     try:
-        token = _extract_ws_token(websocket, token)
+        token = _extract_ws_token(websocket)
         if not token:
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
@@ -214,27 +264,39 @@ async def bus_location_ws(
 
         # Redis dinleyicisini arka plan görevi olarak başlat
         redis_reader_task = asyncio.create_task(forward_redis_to_ws())
+        rate_check = _make_ws_rate_limiter()
         try:
             while True:
                 # WebSocket'ten mesaj bekle (Genellikle şoförden gelir)
                 data = await websocket.receive_text()
-                
+
+                if not rate_check():
+                    logger.warning(f"WS rate limit exceeded for user {user.id} — closing connection")
+                    await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+                    break
+
                 # Eğer gönderen şoför ise, konumu Redis'e yayınla
                 if user.role.value == "sofor":
                     # Veriyi doğrula
                     try:
                         json_data = json.loads(data)
-                        
+
                         if not _validate_location_data(json_data):
                             logger.warning(f"Invalid location data from driver {user.id}")
                             continue
-                        
-                        # Redis kanalına yayınla
+
+                        # Publish to Redis pub/sub (real-time to subscribers)
                         await redis.publish(channel_name, json.dumps(json_data))
-                        
-                        # Apply backpressure: wait for DB persist before accepting next message.
-                        await save_location_to_db(bus_id, json_data)
-                        
+
+                        # Enqueue for batch DB write (flushed every 5 seconds)
+                        _location_queue.put_nowait({
+                            "bus_id": bus_id,
+                            "latitude": json_data["latitude"],
+                            "longitude": json_data["longitude"],
+                            "speed": json_data.get("speed"),
+                            "timestamp": datetime.now(timezone.utc),
+                        })
+
                     except json.JSONDecodeError:
                         pass
                 

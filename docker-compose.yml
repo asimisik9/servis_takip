@@ -48,7 +48,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    command: redis-server --maxmemory 1gb --maxmemory-policy allkeys-lru
 
 volumes:
   postgres_data:

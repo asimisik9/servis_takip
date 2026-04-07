@@ -193,21 +193,32 @@ class OrganizationService:
         active_only: bool = True,
         skip: int = 0,
         limit: int = 100
-    ) -> List[ContractModel]:
-        """Sözleşmeleri listele"""
-        query = select(ContractModel).options(
-            selectinload(ContractModel.school_org),
-            selectinload(ContractModel.company_org)
-        )
+    ) -> tuple[List[ContractModel], int]:
+        """Sözleşmeleri listele. (items, total) tuple döner."""
+        from sqlalchemy import func
+        base_conditions = []
         if school_org_id:
-            query = query.where(ContractModel.school_org_id == school_org_id)
+            base_conditions.append(ContractModel.school_org_id == school_org_id)
         if company_org_id:
-            query = query.where(ContractModel.company_org_id == company_org_id)
+            base_conditions.append(ContractModel.company_org_id == company_org_id)
         if active_only:
-            query = query.where(ContractModel.is_active == True)
-        query = query.offset(skip).limit(limit)
+            base_conditions.append(ContractModel.is_active == True)
+
+        count_query = select(func.count(ContractModel.id)).where(*base_conditions)
+        total = (await self.db.execute(count_query)).scalar_one()
+
+        query = (
+            select(ContractModel)
+            .options(
+                selectinload(ContractModel.school_org),
+                selectinload(ContractModel.company_org),
+            )
+            .where(*base_conditions)
+            .offset(skip)
+            .limit(limit)
+        )
         result = await self.db.execute(query)
-        return result.scalars().all()
+        return result.scalars().all(), total
 
     async def terminate_contract(self, contract_id: str) -> ContractModel:
         """Sözleşmeyi sonlandır"""

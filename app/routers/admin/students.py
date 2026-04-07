@@ -48,17 +48,12 @@ async def get_student(
     db: AsyncSession = Depends(get_db)
 ):
     service = StudentService(db)
-    # Read access control is implicitly handled if user knows UUID 
-    # but strictly we should filter by Org too. For simplicity we assume read is open if ID known
-    # Correction: let's enforce read check too for consistency
-    student = await service.get_student_by_id(unquote(student_id))
+    student = await service.get_student_by_id(
+        unquote(student_id),
+        org_id=current_user.organization_id,
+    )
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
-        
-    # Manual tenant check for read
-    if current_user.organization_id and student.organization_id != current_user.organization_id:
-        raise HTTPException(status_code=404, detail="Student not found")  # Hide existence
-         
     return student
 
 @router.put("/students/{student_id}", response_model=Student)

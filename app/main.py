@@ -11,6 +11,7 @@ from .database import create_tables
 from .database.database import AsyncSessionLocal
 from .database.seed import create_admin_if_not_exists
 from .routers import auth, admin, driver, parent, location_ws, notification
+from .routers.location_ws import batch_location_writer
 from .tasks import cleanup_old_bus_locations
 from jose import JWTError
 from fastapi.middleware.cors import CORSMiddleware
@@ -75,13 +76,22 @@ async def lifespan(app: FastAPI):
     # Periodic cleanup task
     cleanup_task = asyncio.create_task(_periodic_cleanup())
     logger.info("Periodic bus_locations cleanup task scheduled (every %d hours).", CLEANUP_INTERVAL_HOURS)
-    
+
+    # Batch location writer — flushes WS location queue to DB every 5 seconds
+    batch_writer_task = asyncio.create_task(batch_location_writer())
+    logger.info("Batch location writer task started.")
+
     yield
-    
+
     # Cleanup task'ı durdur
     cleanup_task.cancel()
+    batch_writer_task.cancel()
     try:
         await cleanup_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await batch_writer_task
     except asyncio.CancelledError:
         pass
     
@@ -124,9 +134,9 @@ else:
             "BACKEND_CORS_ORIGINS must be set in production! "
             "Add allowed origins to .env file."
         )
-    # Development fallback
-    origins = ["*"]
-    logger.warning("CORS: Using wildcard origins in development mode")
+    # Development fallback — explicit origins only, never wildcard
+    origins = ["http://localhost:5173", "http://localhost:3000"]
+    logger.warning("CORS: Using default development origins (localhost:5173, localhost:3000)")
 
 app.add_middleware(
     CORSMiddleware,

@@ -173,6 +173,12 @@ class NotificationService:
         if student_id and not await self._is_student_in_user_scope(sender_user, student_id):
             raise HTTPException(status_code=403, detail="Student is out of your tenant scope")
 
+        # Batch fetch tüm recipient'ları tek sorguda session identity map'e yükle.
+        # Alttaki döngüdeki db.get() çağrıları N+1 yerine identity map cache'i kullanır.
+        await self.db.execute(
+            select(UserModel).where(UserModel.id.in_(unique_recipient_ids))
+        )
+
         missing_recipients: List[str] = []
         out_of_scope_recipients: List[str] = []
 
@@ -304,12 +310,20 @@ class NotificationService:
             logger.warning(f"Öğrenci bulunamadı: {student_id}")
             return []
 
-        # Velileri bul
+        # Velileri bul — parent user'ları tek sorguda session identity map'e yükle
+        # böylece send_notification içindeki db.get(UserModel, parent_id) çağrıları
+        # N+1 yerine identity map cache'i kullanır.
         query = select(ParentStudentRelation).where(
             ParentStudentRelation.student_id == student_id
         )
         result = await self.db.execute(query)
         relations = result.scalars().all()
+
+        if relations:
+            parent_ids = [r.parent_id for r in relations]
+            await self.db.execute(
+                select(UserModel).where(UserModel.id.in_(parent_ids))
+            )
 
         notifications = []
         for relation in relations:

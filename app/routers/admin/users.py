@@ -45,14 +45,12 @@ async def get_user(
     db: AsyncSession = Depends(get_db)
 ):
     service = UserService(db)
-    user = await service.get_user_by_id(unquote(user_id))
+    user = await service.get_user_by_id(
+        unquote(user_id),
+        org_id=current_user.organization_id,
+    )
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-        
-    # Manual tenant check for read
-    if current_user.organization_id and user.organization_id != current_user.organization_id:
-         raise HTTPException(status_code=404, detail="User not found")
-         
     return user
 
 @router.put("/users/{user_id}", response_model=User)
