@@ -15,8 +15,8 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.create_index('ix_users_email', 'users', ['email'], unique=True)
+    op.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_email ON users (email)")
 
 
 def downgrade() -> None:
-    op.drop_index('ix_users_email', table_name='users')
+    op.execute("DROP INDEX IF EXISTS ix_users_email")

@@ -15,8 +15,8 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.create_index('ix_students_organization_id', 'students', ['organization_id'])
+    op.execute("CREATE INDEX IF NOT EXISTS ix_students_organization_id ON students (organization_id)")
 
 
 def downgrade() -> None:
-    op.drop_index('ix_students_organization_id', table_name='students')
+    op.execute("DROP INDEX IF EXISTS ix_students_organization_id")

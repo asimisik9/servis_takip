@@ -15,15 +15,12 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # Tenant filter on schools (used in bus queries joining schools.organization_id)
-    op.create_index('ix_schools_organization_id', 'schools', ['organization_id'])
-    # Bus lookup by school (admin bus listing by school)
-    op.create_index('ix_buses_school_id', 'buses', ['school_id'])
-    # Composite index for cross-tenant user lookup (id + org guard)
-    op.create_index('ix_users_id_organization_id', 'users', ['id', 'organization_id'])
+    op.execute("CREATE INDEX IF NOT EXISTS ix_schools_organization_id ON schools (organization_id)")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_buses_school_id ON buses (school_id)")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_users_id_organization_id ON users (id, organization_id)")
 
 
 def downgrade() -> None:
-    op.drop_index('ix_users_id_organization_id', table_name='users')
-    op.drop_index('ix_buses_school_id', table_name='buses')
-    op.drop_index('ix_schools_organization_id', table_name='schools')
+    op.execute("DROP INDEX IF EXISTS ix_users_id_organization_id")
+    op.execute("DROP INDEX IF EXISTS ix_buses_school_id")
+    op.execute("DROP INDEX IF EXISTS ix_schools_organization_id")
