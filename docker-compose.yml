@@ -6,11 +6,9 @@ services:
     env_file:
       - .env
     environment:
-      - POSTGRES_SERVER=db
+      - POSTGRES_SERVER=172.17.0.1
       - REDIS_HOST=redis
     depends_on:
-      db:
-        condition: service_healthy
       redis:
         condition: service_healthy
     restart: always
@@ -21,7 +19,6 @@ services:
       retries: 3
       start_period: 15s
 
-  
   redis:
     image: redis:7-alpine
     ports:
