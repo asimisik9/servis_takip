@@ -1,5 +1,5 @@
 import json
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, Header
 from fastapi.encoders import jsonable_encoder
 from typing import List, Annotated
 from datetime import date
@@ -70,14 +70,21 @@ async def get_student_attendance_history(
     student_id: str,
     current_user: Annotated[User, Depends(get_current_parent_user)],
     db: AsyncSession = Depends(get_db),
-    date: date | None = Query(default=None, description="Belirli bir tarihteki yoklama kayıtlarını filtrelemek için kullanılır")
+    date: date | None = Query(default=None, description="Belirli bir tarihteki yoklama kayıtlarını filtrelemek için kullanılır"),
+    timezone_name: str | None = Header(default=None, alias="X-Timezone")
 ):
     """
     Öğrencinin geçmiş yoklama kayıtlarını listeler.
     Opsiyonel olarak tarih parametresi alır.
+    Tarih filtresi ve dönen zaman damgaları kullanıcı zaman dilimine göre hesaplanır.
     """
     service = ParentService(db)
-    return await service.get_student_attendance_history(current_user.id, student_id, date)
+    return await service.get_student_attendance_history(
+        current_user.id,
+        student_id,
+        filter_date=date,
+        timezone_name=timezone_name,
+    )
 
 @router.get("/students/{student_id}/dashboard", response_model=DashboardResponse)
 async def get_student_dashboard(

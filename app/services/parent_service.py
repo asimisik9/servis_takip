@@ -2,9 +2,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import and_, select
 from fastapi import HTTPException
 from typing import List, Optional
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta, timezone
 import httpx
 import logging
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ..database.models.student import Student as StudentModel
 from ..database.models.parent_student_relation import ParentStudentRelation
@@ -17,6 +18,8 @@ from ..database.models.bus import Bus
 from ..database.models.user import User
 from ..database.models.absence import Absence
 from ..database.schemas.absence import AbsenceStatusResponse
+from ..database.schemas.attendance_log import AttendanceLog as AttendanceLogSchema
+from ..database.schemas.attendance_log import AttendanceStatus as AttendanceStatusSchema
 from ..database.schemas.dashboard import DashboardResponse
 from ..database.schemas.student import StudentAddressUpdate
 from .student_service import StudentService
@@ -26,6 +29,8 @@ from ..core.redis import redis_manager
 logger = logging.getLogger(__name__)
 
 class ParentService:
+    DEFAULT_PARENT_TIMEZONE = "Europe/Istanbul"
+
     def __init__(self, db: AsyncSession):
         self.db = db
         self.gmaps_api_key = settings.GOOGLE_MAPS_API_KEY
@@ -85,19 +90,32 @@ class ParentService:
             
         return bus_location
 
-    async def get_student_attendance_history(self, parent_id: str, student_id: str, filter_date: Optional[date] = None) -> List[AttendanceLog]:
+    async def get_student_attendance_history(
+        self,
+        parent_id: str,
+        student_id: str,
+        filter_date: Optional[date] = None,
+        timezone_name: Optional[str] = None,
+    ) -> List[AttendanceLogSchema]:
         await self._ensure_parent_student_relation(parent_id, student_id)
+        user_tz = self._resolve_user_timezone(timezone_name)
 
-        query = select(AttendanceLog).where(AttendanceLog.student_id == student_id)
-        
+        query = select(AttendanceLog).where(
+            AttendanceLog.student_id == student_id,
+            AttendanceLog.reverted_at.is_(None),
+        )
+
         if filter_date:
-            start = datetime.combine(filter_date, datetime.min.time())
-            end = datetime.combine(filter_date, datetime.max.time())
-            query = query.where(AttendanceLog.log_time >= start, AttendanceLog.log_time <= end)
-            
+            start, end = self._build_utc_day_window(filter_date, user_tz)
+            query = query.where(
+                AttendanceLog.log_time >= start,
+                AttendanceLog.log_time < end,
+            )
+
         query = query.order_by(AttendanceLog.log_time.desc())
         result = await self.db.execute(query)
-        return result.scalars().all()
+        logs = result.scalars().all()
+        return [self._serialize_attendance_log_for_timeline(log, user_tz) for log in logs]
 
     async def get_student_dashboard_data(self, parent_id: str, student_id: str) -> DashboardResponse:
         await self._ensure_parent_student_relation(parent_id, student_id)
@@ -163,6 +181,45 @@ class ParentService:
             driverPhone=driver.phone_number if driver else None,
             plateNumber=bus.plate_number,
             busId=bus.id
+        )
+
+    @classmethod
+    def _resolve_user_timezone(cls, timezone_name: Optional[str]) -> ZoneInfo:
+        candidate = (timezone_name or cls.DEFAULT_PARENT_TIMEZONE).strip()
+        try:
+            return ZoneInfo(candidate)
+        except ZoneInfoNotFoundError as exc:
+            raise HTTPException(status_code=400, detail="Invalid timezone") from exc
+
+    @staticmethod
+    def _build_utc_day_window(filter_date: date, user_tz: ZoneInfo) -> tuple[datetime, datetime]:
+        local_start = datetime.combine(filter_date, time.min, tzinfo=user_tz)
+        local_end = local_start + timedelta(days=1)
+        utc_start = local_start.astimezone(timezone.utc).replace(tzinfo=None)
+        utc_end = local_end.astimezone(timezone.utc).replace(tzinfo=None)
+        return utc_start, utc_end
+
+    @staticmethod
+    def _as_aware_utc(value: datetime) -> datetime:
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
+    def _serialize_attendance_log_for_timeline(
+        self,
+        log: AttendanceLog,
+        user_tz: ZoneInfo,
+    ) -> AttendanceLogSchema:
+        localized_log_time = self._as_aware_utc(log.log_time).astimezone(user_tz)
+        return AttendanceLogSchema(
+            id=log.id,
+            student_id=log.student_id,
+            driver_id=log.driver_id,
+            bus_id=log.bus_id,
+            status=AttendanceStatusSchema(log.status.value),
+            latitude=float(log.latitude),
+            longitude=float(log.longitude),
+            log_time=localized_log_time,
         )
 
     async def _calculate_eta(
