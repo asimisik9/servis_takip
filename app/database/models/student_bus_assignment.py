@@ -15,6 +15,7 @@ class StudentBusAssignment(Base):
     __tablename__ = "student_bus_assignments"
     __table_args__ = (
         UniqueConstraint('bus_id', 'student_id', name='uq_bus_student'),
+        UniqueConstraint('student_id', name='uq_student_single_bus_assignment'),
     )
     id: Mapped[str] = mapped_column(String, primary_key=True)
     bus_id: Mapped[str] = mapped_column(ForeignKey("buses.id", ondelete="CASCADE"))

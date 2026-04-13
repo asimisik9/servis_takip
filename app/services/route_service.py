@@ -7,7 +7,7 @@ Optimizes the order of student pickups for a bus route
 import asyncio
 import hashlib
 import logging
-from typing import List, Dict, Optional, Tuple, Set
+from typing import List, Optional, Tuple, Set
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -16,13 +16,13 @@ from datetime import datetime, timezone
 
 from ..database.models.bus import Bus as BusModel
 from ..database.models.student_bus_assignment import StudentBusAssignment
-from ..database.models.student import Student as StudentModel
 from ..database.models.bus_location import BusLocation as BusLocationModel
 from ..database.models.school import School as SchoolModel
 from ..database.schemas.route import RouteResponse, RouteStop, OptimizedRouteResponse, RoutePoint
 from ..core.config import settings
 from ..core.redis import redis_manager
 from .route_progress_service import RouteProgressService
+from .trip_session_service import TripSessionService
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +35,7 @@ class RouteService:
         self.gmaps_client = None
         self._initialize_gmaps_client()
         self._progress = RouteProgressService()
+        self._trip_sessions = TripSessionService(db)
     
     def _initialize_gmaps_client(self) -> None:
         """Initialize Google Maps client"""
@@ -69,8 +70,14 @@ class RouteService:
         # Include visited/ignored student state in cache key to avoid stale route responses.
         combined_excludes: Set[str] = set()
         if not include_all:
-            server_visited = await self._progress.get_visited(bus_id)
-            combined_excludes.update(server_visited)
+            completed_students = await self._trip_sessions.get_route_completed_student_ids(
+                bus_id=bus_id,
+                trip_type=trip_type,
+            )
+            combined_excludes.update(completed_students)
+
+            manual_visited = await self._progress.get_visited(bus_id, trip_type)
+            combined_excludes.update(manual_visited)
             if exclude_student_ids:
                 combined_excludes.update(exclude_student_ids)
 
@@ -152,17 +159,19 @@ class RouteService:
         # Optimize route using Google Maps
         if self.gmaps_client and len(stops) > 0 and origin is not None and destination is not None:
             optimized_route = await self._optimize_with_google_maps(
-                bus_id, stops, origin, destination
+                bus_id,
+                stops,
+                origin,
+                destination,
+                trip_type,
             )
         else:
-            optimized_route = OptimizedRouteResponse(
+            optimized_route = self._build_geographic_fallback_route(
                 bus_id=bus_id,
                 stops=stops,
-                origin=(RoutePoint(latitude=origin[0], longitude=origin[1]) if origin else None),
-                destination=(RoutePoint(latitude=destination[0], longitude=destination[1]) if destination else None),
-                total_distance_meters=0,
-                total_duration_seconds=0,
-                generated_at=datetime.now(timezone.utc)
+                origin=origin,
+                destination=destination,
+                trip_type=trip_type,
             )
         
         # Cache the route for 30 minutes (1800 seconds)
@@ -234,6 +243,133 @@ class RouteService:
 
         logger.info(f"Route: {len(stops)} stops with coordinates remain for bus {bus_id}")
         return stops
+
+    @staticmethod
+    def _stable_stop_sort_key(stop: RouteStop) -> tuple[str, str, str]:
+        return (
+            (stop.student_number or "").lower(),
+            (stop.full_name or "").lower(),
+            stop.student_id,
+        )
+
+    @staticmethod
+    def _distance_meters(
+        lat1: float,
+        lng1: float,
+        lat2: float,
+        lng2: float,
+    ) -> float:
+        import math
+
+        earth_radius_m = 6371000
+        phi1 = math.radians(lat1)
+        phi2 = math.radians(lat2)
+        delta_phi = math.radians(lat2 - lat1)
+        delta_lambda = math.radians(lng2 - lng1)
+        a = math.sin(delta_phi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda / 2) ** 2
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+        return earth_radius_m * c
+
+    def _build_geographic_fallback_route(
+        self,
+        *,
+        bus_id: str,
+        stops: List[RouteStop],
+        origin: Optional[Tuple[float, float]],
+        destination: Optional[Tuple[float, float]],
+        trip_type: str,
+    ) -> OptimizedRouteResponse:
+        ordered_stops = self._order_stops_geographically(
+            stops=stops,
+            origin=origin,
+            destination=destination,
+            trip_type=trip_type,
+        )
+        for idx, stop in enumerate(ordered_stops, 1):
+            stop.sequence_order = idx
+
+        overview_polyline = None
+        try:
+            import polyline
+
+            coords = []
+            if origin is not None:
+                coords.append(origin)
+            coords.extend((stop.latitude, stop.longitude) for stop in ordered_stops)
+            if destination is not None:
+                coords.append(destination)
+            if coords:
+                overview_polyline = polyline.encode(coords)
+        except Exception:
+            overview_polyline = None
+
+        return OptimizedRouteResponse(
+            bus_id=bus_id,
+            stops=ordered_stops,
+            origin=(RoutePoint(latitude=origin[0], longitude=origin[1]) if origin else None),
+            destination=(RoutePoint(latitude=destination[0], longitude=destination[1]) if destination else None),
+            total_distance_meters=0,
+            total_duration_seconds=0,
+            generated_at=datetime.now(timezone.utc),
+            overview_polyline=overview_polyline,
+        )
+
+    def _order_stops_geographically(
+        self,
+        *,
+        stops: List[RouteStop],
+        origin: Optional[Tuple[float, float]],
+        destination: Optional[Tuple[float, float]],
+        trip_type: str,
+    ) -> List[RouteStop]:
+        if len(stops) <= 1:
+            return list(stops)
+
+        remaining = sorted(stops, key=self._stable_stop_sort_key)
+        fixed_last_stop: RouteStop | None = None
+        if trip_type == "from_school" and destination is not None and len(remaining) > 1:
+            fixed_last_stop = min(
+                remaining,
+                key=lambda stop: (
+                    self._distance_meters(stop.latitude, stop.longitude, destination[0], destination[1]),
+                    self._stable_stop_sort_key(stop),
+                ),
+            )
+            remaining = [stop for stop in remaining if stop.student_id != fixed_last_stop.student_id]
+
+        if origin is not None:
+            current_point = origin
+        elif destination is not None and remaining:
+            anchor = max(
+                remaining,
+                key=lambda stop: (
+                    self._distance_meters(stop.latitude, stop.longitude, destination[0], destination[1]),
+                    self._stable_stop_sort_key(stop),
+                ),
+            )
+            current_point = (anchor.latitude, anchor.longitude)
+        else:
+            ordered = list(remaining)
+            if fixed_last_stop is not None:
+                ordered.append(fixed_last_stop)
+            return ordered
+
+        ordered: List[RouteStop] = []
+        while remaining:
+            next_stop = min(
+                remaining,
+                key=lambda stop: (
+                    self._distance_meters(current_point[0], current_point[1], stop.latitude, stop.longitude),
+                    self._stable_stop_sort_key(stop),
+                ),
+            )
+            ordered.append(next_stop)
+            current_point = (next_stop.latitude, next_stop.longitude)
+            remaining.remove(next_stop)
+
+        if fixed_last_stop is not None:
+            ordered.append(fixed_last_stop)
+        return ordered
     
     async def _get_latest_bus_location(self, bus_id: str) -> Optional[Tuple[float, float]]:
         """Fetch latest reported bus location as (lat, lng)."""
@@ -362,6 +498,7 @@ class RouteService:
         stops: List[RouteStop],
         origin: Tuple[float, float],
         destination: Tuple[float, float],
+        trip_type: str,
     ) -> OptimizedRouteResponse:
         """
         Optimize route using Google Maps Directions API
@@ -403,12 +540,12 @@ class RouteService:
             
             if not result or len(result) == 0:
                 logger.warning("Google Maps returned empty result")
-                return OptimizedRouteResponse(
+                return self._build_geographic_fallback_route(
                     bus_id=bus_id,
                     stops=stops,
-                    total_distance_meters=0,
-                    total_duration_seconds=0,
-                    generated_at=datetime.now(timezone.utc)
+                    origin=origin,
+                    destination=destination,
+                    trip_type=trip_type,
                 )
             
             # Extract optimization information
@@ -417,6 +554,15 @@ class RouteService:
             # Get the optimized waypoint order
             waypoint_order = optimized_route_info.get("waypoint_order", [])
             logger.info(f"Route: waypoint_order={waypoint_order}")
+            if len(waypoint_order) != len(stops):
+                logger.warning("Google Maps returned incomplete waypoint order, using geographic fallback")
+                return self._build_geographic_fallback_route(
+                    bus_id=bus_id,
+                    stops=stops,
+                    origin=origin,
+                    destination=destination,
+                    trip_type=trip_type,
+                )
             
             # Reorder stops based on optimization
             optimized_stops = []
@@ -464,38 +610,21 @@ class RouteService:
                 "Directions API may not be enabled in Google Cloud Console. "
                 "Enable it at: https://console.cloud.google.com/apis/library/directions-backend.googleapis.com"
             )
-            # Return unoptimized route with fallback polyline on API error
-            # Generate simple polyline from origin -> stops -> destination
-            import polyline
-            fallback_coords = []
-            if origin:
-                fallback_coords.append((origin[0], origin[1]))
-            for stop in stops:
-                fallback_coords.append((stop.latitude, stop.longitude))
-            if destination:
-                fallback_coords.append((destination[0], destination[1]))
-            fallback_polyline = polyline.encode(fallback_coords) if fallback_coords else None
-            
-            return OptimizedRouteResponse(
+            return self._build_geographic_fallback_route(
                 bus_id=bus_id,
                 stops=stops,
-                origin=RoutePoint(latitude=origin[0], longitude=origin[1]) if origin else None,
-                destination=RoutePoint(latitude=destination[0], longitude=destination[1]) if destination else None,
-                total_distance_meters=0,
-                total_duration_seconds=0,
-                generated_at=datetime.now(timezone.utc),
-                overview_polyline=fallback_polyline
+                origin=origin,
+                destination=destination,
+                trip_type=trip_type,
             )
         except Exception as e:
             logger.error(f"Unexpected error optimizing route: {str(e)}")
-            return OptimizedRouteResponse(
+            return self._build_geographic_fallback_route(
                 bus_id=bus_id,
                 stops=stops,
-                origin=RoutePoint(latitude=origin[0], longitude=origin[1]) if origin else None,
-                destination=RoutePoint(latitude=destination[0], longitude=destination[1]) if destination else None,
-                total_distance_meters=0,
-                total_duration_seconds=0,
-                generated_at=datetime.now(timezone.utc)
+                origin=origin,
+                destination=destination,
+                trip_type=trip_type,
             )
     
     async def invalidate_route_cache(self, bus_id: str) -> None:

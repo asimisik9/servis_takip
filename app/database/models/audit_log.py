@@ -12,7 +12,7 @@ class AuditLog(Base):
     endpoint: Mapped[str] = mapped_column(String)
     details: Mapped[str] = mapped_column(String, nullable=True) # JSON string or description
     status_code: Mapped[int] = mapped_column(Integer)
-    timestamp: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     
     # Relationship
     user: Mapped["User"] = relationship("User")

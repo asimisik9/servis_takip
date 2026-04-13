@@ -47,10 +47,16 @@ class StudentService:
         if not organization:
             raise HTTPException(status_code=400, detail="Organization not found")
 
-    async def _ensure_school_exists(self, school_id: str) -> None:
+    async def _ensure_school_belongs_to_org(self, school_id: str, organization_id: str) -> None:
         school = await self.db.get(SchoolModel, school_id)
         if not school:
             raise HTTPException(status_code=400, detail="School not found")
+        # Sadece okul tipi organizasyonlarda tenant izolasyonu uygula.
+        # Taşıma şirketi organizasyonlarındaki öğrenciler herhangi bir fiziksel okula bağlanabilir.
+        if school.organization_id and school.organization_id != organization_id:
+            org = await self.db.get(OrganizationModel, organization_id)
+            if org and org.type.value == "school":
+                raise HTTPException(status_code=400, detail="School does not belong to student's organization")
 
     async def get_students(
         self,
@@ -114,7 +120,7 @@ class StudentService:
         await self._ensure_organization_exists(organization_id)
 
         if student.school_id is not None:
-            await self._ensure_school_exists(student.school_id)
+            await self._ensure_school_belongs_to_org(student.school_id, organization_id)
 
         lat, lng = None, None
         if student.address:
@@ -173,19 +179,21 @@ class StudentService:
         await self._ensure_organization_exists(target_organization_id)
 
         if "school_id" in student_update.model_fields_set and student_update.school_id is not None:
-            await self._ensure_school_exists(student_update.school_id)
+            await self._ensure_school_belongs_to_org(student_update.school_id, target_organization_id)
 
         address_changed = False
         if "address" in student_update.model_fields_set:
-            db_student.address = student_update.address
-            if student_update.address:
-                lat, lng = await self._geocode_address(student_update.address)
-                db_student.latitude = lat
-                db_student.longitude = lng
-            else:
-                db_student.latitude = None
-                db_student.longitude = None
-            address_changed = True
+            new_address = student_update.address
+            address_changed = new_address != db_student.address
+            if address_changed:
+                db_student.address = new_address
+                if new_address:
+                    lat, lng = await self._geocode_address(new_address)
+                    db_student.latitude = lat
+                    db_student.longitude = lng
+                else:
+                    db_student.latitude = None
+                    db_student.longitude = None
 
         if student_update.full_name is not None:
             db_student.full_name = student_update.full_name

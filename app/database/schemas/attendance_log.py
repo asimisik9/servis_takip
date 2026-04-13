@@ -3,6 +3,11 @@ from typing import Optional
 from pydantic import BaseModel, Field
 from enum import Enum
 
+class TripType(str, Enum):
+    """Trip type used to build stable per-service route state."""
+    to_school = "to_school"
+    from_school = "from_school"
+
 class AttendanceStatus(str, Enum):
     """Attendance status enum"""
     indi = "indi"
@@ -25,6 +30,8 @@ class AttendanceLogRequest(BaseModel):
     latitude: float = Field(..., ge=-90, le=90)
     longitude: float = Field(..., ge=-180, le=180)
     log_time: datetime
+    trip_type: Optional[TripType] = None
+    idempotency_key: Optional[str] = Field(default=None, min_length=8, max_length=128)
 
 class AttendanceLogCreate(AttendanceLogBase):
     """Schema for creating a new AttendanceLog"""

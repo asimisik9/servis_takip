@@ -6,7 +6,7 @@ from jose import JWTError, jwt
 import logging
 import secrets
 import smtplib
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from uuid import uuid4
@@ -42,6 +42,14 @@ EMAIL_VERIFICATION_COOLDOWN_SECONDS = 60
 class AuthService:
     def __init__(self, db: AsyncSession):
         self.db = db
+
+    @staticmethod
+    def _credentials_exception() -> HTTPException:
+        return HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     async def register_user(self, user_data: UserCreate) -> UserModel:
         raise HTTPException(
@@ -300,8 +308,17 @@ class AuthService:
                 self.db.add(token_record)
                 await self.db.commit()
 
-                reset_link = self._build_password_reset_link(raw_token)
-                await self._send_password_reset_email(user.email, user.full_name, reset_link, raw_token)
+                try:
+                    reset_link = self._build_password_reset_link(raw_token)
+                    await self._send_password_reset_email(
+                        user.email,
+                        user.full_name,
+                        reset_link,
+                        raw_token,
+                    )
+                except Exception:
+                    await self._cleanup_password_reset_token(token_record.id)
+                    raise
         finally:
             try:
                 await redis_manager.set(cooldown_key, "1", ex=FORGOT_PASSWORD_COOLDOWN_SECONDS)
@@ -309,6 +326,24 @@ class AuthService:
                 logger.warning("Failed to set forgot-password cooldown key: %s", exc)
 
         return {"message": FORGOT_PASSWORD_GENERIC_MESSAGE, "success": True}
+
+    async def _cleanup_password_reset_token(self, token_id: str) -> None:
+        try:
+            await self.db.execute(
+                delete(PasswordResetToken).where(PasswordResetToken.id == token_id)
+            )
+            await self.db.commit()
+        except Exception as exc:
+            rollback = getattr(self.db, "rollback", None)
+            if rollback is not None:
+                try:
+                    await rollback()
+                except Exception:
+                    pass
+            logger.critical(
+                "Failed to cleanup password reset token after email dispatch failure: %s",
+                exc,
+            )
 
     async def reset_password(self, token: str, new_password: str) -> dict[str, object]:
         token_hash = self._hash_reset_token(token.strip())
@@ -600,7 +635,48 @@ class AuthService:
                 detail="Token revocation failed",
             )
 
-    async def logout(self, token: str):
+    @staticmethod
+    def _decode_refresh_token_for_logout(
+        refresh_token: str,
+        *,
+        current_user_id: str | None,
+        current_user_email: str | None,
+    ) -> dict[str, object] | None:
+        credentials_exception = AuthService._credentials_exception()
+        try:
+            payload = jwt.decode(
+                refresh_token,
+                REFRESH_SECRET_KEY,
+                algorithms=[ALGORITHM],
+                options={"verify_exp": False},
+            )
+        except JWTError as exc:
+            raise credentials_exception from exc
+
+        if payload.get("type") != "refresh":
+            raise credentials_exception
+        if current_user_id is not None and payload.get("id") != current_user_id:
+            raise credentials_exception
+        if current_user_email is not None and payload.get("sub") != current_user_email:
+            raise credentials_exception
+
+        exp = payload.get("exp")
+        if not isinstance(exp, int):
+            raise credentials_exception
+
+        now = int(datetime.now(timezone.utc).timestamp())
+        if exp <= now:
+            return None
+
+        return payload
+
+    async def logout(
+        self,
+        token: str,
+        refresh_token: str | None = None,
+        current_user_id: str | None = None,
+        current_user_email: str | None = None,
+    ):
         try:
             # Try decoding as access token first, then refresh
             try:
@@ -608,8 +684,20 @@ class AuthService:
             except JWTError:
                 payload = jwt.decode(token, REFRESH_SECRET_KEY, algorithms=[ALGORITHM])
 
+            refresh_payload = None
+            if refresh_token is not None:
+                refresh_payload = self._decode_refresh_token_for_logout(
+                    refresh_token,
+                    current_user_id=current_user_id,
+                    current_user_email=current_user_email,
+                )
+
             exp = payload.get("exp", 0)
-            await self._blacklist_token(token, exp)
+            if isinstance(exp, int) and exp > 0:
+                await self._blacklist_token(token, exp)
+
+            if refresh_payload is not None:
+                await self._blacklist_token(refresh_token, refresh_payload["exp"])
         except HTTPException:
             raise
         except JWTError:
