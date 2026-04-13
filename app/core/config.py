@@ -8,6 +8,8 @@ class Settings(BaseSettings):
     VERSION: str = "1.0.0"
     API_V1_STR: str = "/api"
     ENVIRONMENT: str = "development"  # local, development, production
+    AUTO_CREATE_TABLES: bool = True
+    AUTO_SEED_ADMIN: bool = True
     
     # Security
     SECRET_KEY: str

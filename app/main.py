@@ -61,17 +61,20 @@ async def lifespan(app: FastAPI):
     Veritabanı bağlantısını ve tablo oluşturma işlemini test eder.
     """
     logger.info("Veritabanı bağlantısı ve startup kontrolleri başlıyor...")
-    if settings.ENVIRONMENT != "production":
+    if settings.AUTO_CREATE_TABLES:
         await create_tables()  # Development convenience
         logger.info("Veritabanı tabloları doğrulandı/oluşturuldu.")
     else:
-        logger.info("Production ortamı: create_tables atlandı (Alembic migration bekleniyor).")
+        logger.info("AUTO_CREATE_TABLES=false: create_tables atlandı.")
     
     # Redis bağlantısı
     await redis_manager.connect()
     
     # Seed initial data
-    await create_admin_if_not_exists()
+    if settings.AUTO_SEED_ADMIN:
+        await create_admin_if_not_exists()
+    else:
+        logger.info("AUTO_SEED_ADMIN=false: admin seed atlandı.")
     
     # Periodic cleanup task
     cleanup_task = asyncio.create_task(_periodic_cleanup())
