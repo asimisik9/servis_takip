@@ -140,6 +140,19 @@ class AssignmentService:
                 detail="Student and Bus must belong to the same school when student has school_id",
             )
 
+        existing_assignment_for_student = (
+            await self.db.execute(
+                select(StudentBusAssignment).where(StudentBusAssignment.student_id == student_id)
+            )
+        ).scalar_one_or_none()
+        if existing_assignment_for_student:
+            if existing_assignment_for_student.bus_id == bus_id:
+                raise HTTPException(status_code=400, detail="Assignment already exists")
+            raise HTTPException(
+                status_code=409,
+                detail="Student is already assigned to another bus. Remove the current assignment first.",
+            )
+
         exists_query = select(StudentBusAssignment).where(
             StudentBusAssignment.student_id == student_id,
             StudentBusAssignment.bus_id == bus_id,
@@ -176,6 +189,7 @@ class AssignmentService:
         loaded_assignment = (await self.db.execute(reload_query)).scalar_one()
 
         await self._invalidate_route_cache(bus_id)
+        await self._invalidate_roster_cache_for_driver(bus.current_driver_id)
         return loaded_assignment
 
     async def assign_driver_to_bus(
@@ -198,9 +212,12 @@ class AssignmentService:
         if not driver or driver.role.value != "sofor":
             raise HTTPException(status_code=400, detail="Driver not found, role is not sofor, or access denied")
 
+        previous_driver_id = bus.current_driver_id
         bus.current_driver_id = driver_id
         await self.db.commit()
         await self.db.refresh(bus)
+        await self._invalidate_roster_cache_for_driver(previous_driver_id)
+        await self._invalidate_roster_cache_for_driver(driver_id)
         return bus
 
     async def get_student_bus_assignments(
@@ -274,9 +291,11 @@ class AssignmentService:
             raise HTTPException(status_code=404, detail="Assignment not found or access denied")
 
         bus_id = assignment.bus_id
+        driver_id = assignment.bus.current_driver_id if assignment.bus else None
         await self.db.delete(assignment)
         await self.db.commit()
         await self._invalidate_route_cache(bus_id)
+        await self._invalidate_roster_cache_for_driver(driver_id)
 
     async def delete_parent_student_relation(
         self,
@@ -306,3 +325,12 @@ class AssignmentService:
             logger.info(f"Route cache invalidated for bus {bus_id}")
         except Exception as e:
             logger.error(f"Failed to invalidate cache for bus {bus_id}: {str(e)}")
+
+    async def _invalidate_roster_cache_for_driver(self, driver_id: Optional[str]) -> None:
+        if not driver_id:
+            return
+        try:
+            await redis_manager.delete(f"roster:{driver_id}")
+            logger.info(f"Roster cache invalidated for driver {driver_id}")
+        except Exception as e:
+            logger.error(f"Failed to invalidate roster cache for driver {driver_id}: {str(e)}")

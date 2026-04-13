@@ -54,6 +54,18 @@ class ChangePasswordRequest(BaseModel):
         return _validate_password_complexity(value)
 
 
+class LogoutRequest(BaseModel):
+    refresh_token: str
+
+    @field_validator("refresh_token")
+    @classmethod
+    def validate_refresh_token(cls, value: str) -> str:
+        token = value.strip()
+        if not token:
+            raise ValueError("Refresh token is required")
+        return token
+
+
 class AuthActionResponse(BaseModel):
     message: str
     success: bool = True

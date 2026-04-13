@@ -20,3 +20,5 @@ from .token_blacklist import TokenBlacklist
 from .absence import Absence
 from .password_reset_token import PasswordResetToken
 from .email_verification_token import EmailVerificationToken
+from .trip_session import TripSession, TripType
+from .trip_student_state import TripStudentState

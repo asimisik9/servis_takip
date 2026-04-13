@@ -59,7 +59,14 @@ class User(Base):
         "ParentStudentRelation", back_populates="parent"
     )
     attendance_logs: Mapped[list["AttendanceLog"]] = relationship(
-        "AttendanceLog", back_populates="driver"
+        "AttendanceLog",
+        back_populates="driver",
+        foreign_keys="AttendanceLog.driver_id",
+    )
+    reverted_attendance_logs: Mapped[list["AttendanceLog"]] = relationship(
+        "AttendanceLog",
+        back_populates="reverted_by_driver",
+        foreign_keys="AttendanceLog.reverted_by_driver_id",
     )
     notifications: Mapped[list["Notification"]] = relationship(
         "Notification", back_populates="recipient"

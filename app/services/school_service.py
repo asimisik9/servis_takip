@@ -22,13 +22,15 @@ class SchoolService:
         self.db = db
 
     async def _validate_school_organization(self, organization_id: str) -> OrganizationModel:
-        """School organization must exist and be active."""
+        """School organization must exist, be active, and be of type 'school'."""
         query = select(OrganizationModel).where(OrganizationModel.id == organization_id)
         organization = (await self.db.execute(query)).scalar_one_or_none()
         if not organization:
             raise HTTPException(status_code=400, detail="Organization not found")
         if not organization.is_active:
             raise HTTPException(status_code=400, detail="Organization is inactive")
+        if organization.type.value != "school":
+            raise HTTPException(status_code=400, detail="Organization must be of type 'school'")
         return organization
 
     async def _geocode_address(self, address: str) -> tuple[Optional[float], Optional[float]]:

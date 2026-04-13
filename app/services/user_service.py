@@ -23,6 +23,13 @@ class UserService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
+    @staticmethod
+    def _coerce_role(role: UserRole | str) -> UserRole:
+        if isinstance(role, UserRole):
+            return role
+        raw_value = role.value if hasattr(role, "value") else role
+        return UserRole(raw_value)
+
     async def _ensure_organization_exists(self, organization_id: Optional[str]) -> None:
         if organization_id is None:
             return
@@ -30,8 +37,9 @@ class UserService:
         if not organization:
             raise HTTPException(status_code=400, detail="Organization not found")
 
-    @staticmethod
-    def _validate_role_organization_matrix(role: UserRole, organization_id: Optional[str]) -> None:
+    @classmethod
+    def _validate_role_organization_matrix(cls, role: UserRole | str, organization_id: Optional[str]) -> None:
+        role = cls._coerce_role(role)
         if role == UserRole.super_admin:
             if organization_id is not None:
                 raise HTTPException(
@@ -92,8 +100,9 @@ class UserService:
             raise HTTPException(status_code=400, detail="Phone number already registered")
 
         is_tenant_admin = current_user_org_id is not None
+        target_role = self._coerce_role(user.role)
 
-        if is_tenant_admin and user.role == UserRole.super_admin:
+        if is_tenant_admin and target_role == UserRole.super_admin:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Tenant admins cannot create super_admin users",
@@ -102,7 +111,7 @@ class UserService:
         organization_id = current_user_org_id if is_tenant_admin else user.organization_id
 
         await self._ensure_organization_exists(organization_id)
-        self._validate_role_organization_matrix(user.role, organization_id)
+        self._validate_role_organization_matrix(target_role, organization_id)
 
         new_user = UserModel(
             id=str(uuid4()),
@@ -110,7 +119,7 @@ class UserService:
             email=user.email,
             phone_number=user.phone_number,
             password_hash=hash_password(user.password),
-            role=user.role,
+            role=target_role,
             organization_id=organization_id,
         )
         self.db.add(new_user)
@@ -148,7 +157,7 @@ class UserService:
 
         is_tenant_admin = current_user_org_id is not None
 
-        target_role = user_update.role or db_user.role
+        target_role = self._coerce_role(user_update.role) if user_update.role is not None else db_user.role
         if is_tenant_admin and target_role == UserRole.super_admin:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -176,9 +185,10 @@ class UserService:
             db_user.password_hash = hash_password(user_update.password)
 
         if user_update.role is not None:
-            if db_user.role != user_update.role:
-                logger.warning(f"Role change: user={user_id} from={db_user.role.value} to={user_update.role.value}")
-            db_user.role = user_update.role
+            normalized_role = self._coerce_role(user_update.role)
+            if db_user.role != normalized_role:
+                logger.warning(f"Role change: user={user_id} from={db_user.role.value} to={normalized_role.value}")
+            db_user.role = normalized_role
 
         if is_tenant_admin:
             db_user.organization_id = current_user_org_id

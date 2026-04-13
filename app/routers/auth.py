@@ -7,6 +7,7 @@ from ..database.schemas.auth import (
     AuthActionResponse,
     ChangePasswordRequest,
     ForgotPasswordRequest,
+    LogoutRequest,
     ResetPasswordRequest,
 )
 from pydantic import BaseModel
@@ -97,14 +98,20 @@ async def read_users_me(current_user: Annotated[User, Depends(get_current_user)]
 
 @router.post("/logout")
 async def logout(
+    payload: LogoutRequest,
     current_user: Annotated[User, Depends(get_current_user)],
     token: str = Depends(oauth2_scheme),
     auth_service: AuthService = Depends(get_auth_service)
 ):
     """
-    Kullanıcı çıkışı yapar ve token'ı kara listeye alır.
+    Kullanıcı çıkışı yapar ve access/refresh token çiftini kara listeye alır.
     """
-    await auth_service.logout(token)
+    await auth_service.logout(
+        token=token,
+        refresh_token=payload.refresh_token,
+        current_user_id=current_user.id,
+        current_user_email=current_user.email,
+    )
     return {"message": "Successfully logged out"}
 
 @router.post("/refresh", response_model=LoginResponse)
