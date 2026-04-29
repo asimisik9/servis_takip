@@ -8,7 +8,7 @@ services:
     environment:
       - ENVIRONMENT=development
       - AUTO_CREATE_TABLES=false
-      - AUTO_SEED_ADMIN=false
+      - AUTO_SEED_ADMIN=true
       - REDIS_HOST=redis
       - BACKEND_CORS_ORIGINS=["http://localhost:5173","http://localhost:3000","http://localhost:5174"]
     volumes:
